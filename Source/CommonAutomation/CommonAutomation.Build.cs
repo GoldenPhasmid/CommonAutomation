@@ -7,6 +7,7 @@ public class CommonAutomation : ModuleRules
 	public CommonAutomation(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		OptimizeCode = CodeOptimization.Never; // @todo: remove
 		
 		PublicDependencyModuleNames.AddRange(
 			new string[]
@@ -21,6 +22,8 @@ public class CommonAutomation : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
+				"EngineSettings",
+				"NavigationSystem",
 				"Slate",
 				"SlateCore",
 			}

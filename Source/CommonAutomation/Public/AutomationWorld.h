@@ -14,7 +14,7 @@ class FAutomationWorld;
 class UWorldSubsystem;
 class UGameInstanceSubsystem;
 
-enum class EWorldInitType: uint32
+enum class EWorldInitFlags: uint32
 {
 	None				= 0,
 	InitScene			= 1 << 0,
@@ -36,34 +36,47 @@ enum class EWorldInitType: uint32
 	WithGameInstance	= InitScene | StartPlay | CreateGameInstance,
 	WithLocalPlayer		= InitScene | StartPlay | CreateGameInstance | CreateLocalPlayer
 };
-ENUM_CLASS_FLAGS(EWorldInitType)
+ENUM_CLASS_FLAGS(EWorldInitFlags)
 
 using FAutomationWorldPtr = TSharedPtr<FAutomationWorld>;
 using FAutomationWorldRef = TSharedRef<FAutomationWorld>;
 
 struct COMMONAUTOMATION_API FAutomationWorldInitParams
 {
-	FAutomationWorldInitParams() = default;
-	FAutomationWorldInitParams(EWorldType::Type InWorldType, EWorldInitType InInitValues)
+	FAutomationWorldInitParams(EWorldType::Type InWorldType, EWorldInitFlags InInitFlags, TSubclassOf<AGameModeBase> InGameMode = nullptr)
 		: WorldType(InWorldType)
-		, InitValues(InInitValues)
+		, InitFlags(InInitFlags)
+		, DefaultGameMode(InGameMode)
 	{}
+
+	/** @return world initialization values produced from this params */
+	FWorldInitializationValues CreateWorldInitValues() const;
+
+	bool HasWorldPackage() const { return !WorldPackage.IsEmpty(); }
 	
-	/** */
+	bool ShouldInitScene() const;
+	bool CreateGameInstance() const { return !!(InitFlags & EWorldInitFlags::CreateGameInstance); }
+	bool CreatePrimaryPlayer() const { return !!(InitFlags & EWorldInitFlags::CreateLocalPlayer); }
+	bool RouteStartPlay() const { return !!(InitFlags & EWorldInitFlags::StartPlay); }
+	
+	/** World type */
 	EWorldType::Type WorldType = EWorldType::Game;
 
-	/** */
-	EWorldInitType InitValues = EWorldInitType::None;
+	/** World package to load */
+	FString WorldPackage{};
 	
-	/** */
+	/** World initialization flags */
+	EWorldInitFlags InitFlags = EWorldInitFlags::None;
+	
+	/** Default game mode */
 	TSubclassOf<AGameModeBase> DefaultGameMode = nullptr;
+
+	/** */
+	TDelegate<void(UWorld*)> InitWorld;
+
+	/** */
+	TDelegate<void(AWorldSettings*)> InitWorldSettings;
 	
-	/** */
-	TFunction<void(UWorld* World)> InitWorld;
-
-	/** */
-	TFunction<void(AWorldSettings* WorldSettings)> InitWorldSettings;
-
 	static FAutomationWorldInitParams Minimal;
 	static FAutomationWorldInitParams WithGameInstance;
 	static FAutomationWorldInitParams WithLocalPlayer;
@@ -72,29 +85,42 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 class COMMONAUTOMATION_API FAutomationWorld
 {
 public:
+	
 	/**
-	 * 
-	 * @param InitParams 
-	 * @return 
+	 * Create and initialize new automation world with specified init params
+	 * @param InitParams initialization params
+	 * @return minimal world
 	 */
 	static FAutomationWorldPtr CreateWorld(const FAutomationWorldInitParams& InitParams);
-
+	
 	/**
 	 * Create world for automation tests
 	 * @DefaultGameMode world type to create
 	 * @InitValues whether perform world initialization and route BeginPlay
 	 * @return minimal world
 	 */
-	static FAutomationWorldPtr CreateGameWorld(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitType InitValues = EWorldInitType::Minimal);
+	static FAutomationWorldPtr CreateGameWorld(EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
 	/** Creates game world with game instance and game mode, immediately routes start play */
-	static FAutomationWorldPtr CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr);
+	static FAutomationWorldPtr CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
 
 	/** Creates game world with local player (meaning game instance and game mode as well), immediately routes start play */
-	static FAutomationWorldPtr CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr);
+	static FAutomationWorldPtr CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
+
+	template <typename TGameMode>
+	static FAutomationWorldPtr CreateGameWorldWithGameInstance(EWorldInitFlags InitFlags = EWorldInitFlags::None)
+	{
+		return CreateGameWorldWithGameInstance(TGameMode::StaticClass(), InitFlags);
+	}
+
+	template <typename TGameMode>
+	static FAutomationWorldPtr CreateGameWorldWithPlayer(EWorldInitFlags InitFlags = EWorldInitFlags::None)
+	{
+		return CreateGameWorldWithPlayer(TGameMode::StaticClass(), InitFlags);
+	}
 	
-	/** @return whether minimal world has been created */
-	static bool IsRunningAutomationWorld();
+	/** @return whether automation world has been created */
+	static bool Exists();
 
 	/** Create and return game instance subsystem */
 	UGameInstanceSubsystem* CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass);
@@ -131,37 +157,47 @@ public:
 	/** route begin play event to world and actors */
 	void RouteStartPlay() const;
 
-	/** tick minimal world */
+	/** tick active world */
 	void TickWorld(int32 NumFrames);
 	
 	/** route end play event to world and actors */
 	void RouteEndPlay() const;
 
-	/** @return World owned by this minimal world */
+	/** @return active world */
 	UWorld* GetWorld() const;
+	/** @return world context */
 	FWorldContext* GetWorldContext() const;
+	/** @return game instance */
+	UGameInstance* GetGameInstance() const;
 	
 	~FAutomationWorld();
 
 private:
 
-	friend class UAutomationGameInstance;
-
-	static UAutomationGameInstance* CreateGameInstance(FAutomationWorld& MinimalWorld);
+	
 
 	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
-	FAutomationWorld();
+	FAutomationWorld(UWorld* NewWorld, const FAutomationWorldInitParams& InitParams);
 
-	FAutomationWorldInitParams InitParams;
-	FWorldInitializationValues InitValues;
+	void InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams);
+	
+	void CreateGameInstance();
+	void CreateViewportClient();
+	
 	UWorld* World = nullptr;
 	FWorldContext* WorldContext = nullptr;
+	UGameInstance* GameInstance = nullptr;
+
+	/** GWorld value before this automation world was created */
+	UWorld* PrevGWorld = nullptr;
+	/** GFrameCounter value before this automation world was created */
 	uint64 InitialFrameCounter = 0;
 
 	TArray<TObjectPtr<UWorldSubsystem>> WorldSubsystems;
 	TArray<TObjectPtr<UGameInstanceSubsystem>> GameInstanceSubsystems;
 	
-	static bool bRunningAutomationWorld;
+	static UGameInstance* SharedGameInstance;
+	static bool bExists;
 };
 

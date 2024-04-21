@@ -1,24 +1,176 @@
 ﻿#include "AutomationWorld.h"
 
 #include "AutomationGameInstance.h"
+#include "DummyViewport.h"
 #include "EngineUtils.h"
+#include "GameInstanceAutomationSupport.h"
+#include "GameMapsSettings.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameModeBase.h"
 #include "Streaming/LevelStreamingDelegates.h"
 
-bool FAutomationWorld::bRunningAutomationWorld = false;
+DEFINE_LOG_CATEGORY_STATIC(LogAutomationWorld, Log, Log);
 
-FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitType::Minimal};
-FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitType::WithGameInstance};
-FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitType::WithLocalPlayer};
+#define ALLOW_GAME_INSTANCE_REUSE 0
 
-FAutomationWorld::FAutomationWorld()
+bool FAutomationWorld::bExists = false;
+UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
+
+FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
+FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
+FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitFlags::WithLocalPlayer};
+
+FWorldInitializationValues FAutomationWorldInitParams::CreateWorldInitValues() const
 {
-	bRunningAutomationWorld = true;
+	FWorldInitializationValues InitValues{};
+	InitValues.InitializeScenes(ShouldInitScene())
+			  .AllowAudioPlayback(!!(InitFlags & EWorldInitFlags::InitAudio))
+			  .RequiresHitProxies(!!(InitFlags & EWorldInitFlags::InitHitProxy))
+			  .CreatePhysicsScene(!!(InitFlags & EWorldInitFlags::InitPhysics))
+			  .CreateNavigation(!!(InitFlags & EWorldInitFlags::InitNavigation))
+			  .CreateAISystem(!!(InitFlags & EWorldInitFlags::InitAI))
+			  .ShouldSimulatePhysics(!!(InitFlags & EWorldInitFlags::InitWeldedBodies))
+			  .EnableTraceCollision(!!(InitFlags & EWorldInitFlags::InitCollision))
+			  .SetTransactional(false) // @todo: does transactional ever matters for game worlds?
+			  .CreateFXSystem(!!(InitFlags & EWorldInitFlags::InitFX))
+			  .CreateWorldPartition(!!(InitFlags & EWorldInitFlags::InitWorldPartition));
+	if (DefaultGameMode != nullptr)
+	{
+		// override world settings game mode. If DefaultGM is null and WorldSettings GM null, then project's default GM will be used
+		InitValues.SetDefaultGameMode(DefaultGameMode);
+	}
+
+	return InitValues;
+}
+
+bool FAutomationWorldInitParams::ShouldInitScene() const
+{
+	constexpr EWorldInitFlags ShouldInitScene = EWorldInitFlags::InitScene | EWorldInitFlags::InitPhysics | EWorldInitFlags::InitWeldedBodies |
+												EWorldInitFlags::InitHitProxy | EWorldInitFlags::InitCollision | EWorldInitFlags::InitFX;
+	return !!(InitFlags & ShouldInitScene);
+}
+
+FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
+{
+	bExists = true;
 	InitialFrameCounter = GFrameCounter;
 
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddRaw(this, &FAutomationWorld::HandleLevelStreamingStateChange);
+
+	// create game instance if it was requested by user. Game instance is required for game mode
+	// @note: use fallback game instance to create game mode? Don't create game instance if not explicitly specified?
+	if (InitParams.CreateGameInstance() || InitParams.DefaultGameMode != nullptr)
+	{
+		CreateGameInstance();
+	}
+
+	// initialize automation world with new game world
+	InitializeNewWorld(InWorld, InitParams);
+
+	// create viewport client if game instance is specified
+	if (GameInstance != nullptr && WorldContext != nullptr)
+	{
+		CreateViewportClient();
+	}
+
+	// conditionally start play
+	if (InitParams.RouteStartPlay())
+	{
+		RouteStartPlay();
+	}
+
+	// conditionally create primary player.
+	// @note: create before StartPlay? add an option?
+	if (InitParams.CreatePrimaryPlayer())
+	{
+		GetOrCreatePrimaryPlayer();
+	}
 }
+
+void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
+{
+	World = InWorld;
+	World->SetGameInstance(GameInstance);
+	
+	// Step 1: swap GWorld to point to a newly created world
+	PrevGWorld = GWorld;
+	GWorld = World;
+
+	// Step 2: create and initialize world context
+	WorldContext = &GEngine->CreateNewWorldContext(InitParams.WorldType);
+	WorldContext->SetCurrentWorld(World);
+	WorldContext->OwningGameInstance = GameInstance;
+	if (GameInstance)
+	{
+		// notify game instance that it is initialized for automation (primarily to set world context)
+		CastChecked<IGameInstanceAutomationSupport>(GameInstance)->InitForAutomation(WorldContext);
+	}
+	
+	// Step 3: initialize world settings
+	AWorldSettings* WorldSettings = World->GetWorldSettings();
+	if (InitParams.WorldPackage.IsEmpty() && InitParams.DefaultGameMode)
+	{
+		// override default game mode if the world is created and not loaded
+		WorldSettings->DefaultGameMode = InitParams.DefaultGameMode;
+	}
+	
+	// Step 4: invoke callbacks that should happen before world is fully initialized
+	InitParams.InitWorld.ExecuteIfBound(World);
+	InitParams.InitWorldSettings.ExecuteIfBound(WorldSettings);
+	
+	// Step 5: finish world initialization (see FScopedEditorWorld::Init)
+	World->InitWorld(InitParams.CreateWorldInitValues());
+	if (GameInstance != nullptr)
+	{
+		World->SetGameMode({});
+	}
+	World->PersistentLevel->UpdateModelComponents();
+	World->UpdateWorldComponents(true, false);
+	World->UpdateLevelStreaming();
+}
+
+void FAutomationWorld::CreateGameInstance()
+{
+	if (SharedGameInstance == nullptr)
+	{
+		const UClass* GameInstanceClass = GetDefault<UGameMapsSettings>()->GameInstanceClass.TryLoadClass<UGameInstance>();
+		if (GameInstanceClass == nullptr || !GameInstanceClass->ImplementsInterface(UGameInstanceAutomationSupport::StaticClass()))
+		{
+			// If an invalid or unsupported class type is specified we fall back to the default.
+			GameInstanceClass = UAutomationGameInstance::StaticClass();
+		}
+
+		// create shared game instance
+		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, TEXT("SharedGameInstance"), RF_Transient);
+#if ALLOW_GAME_INSTANCE_REUSE
+		// add to root so game instance lives between automation worlds
+		SharedGameInstance->AddToRoot();
+#endif
+	}
+
+	GameInstance = SharedGameInstance;
+	check(GameInstance);
+}
+
+void FAutomationWorld::CreateViewportClient()
+{
+	check(WorldContext && GameInstance);
+	// create game viewport client to avoid ensures
+	UGameViewportClient* NewViewport = NewObject<UGameViewportClient>(GameInstance->GetEngine());
+	NewViewport->Init(*WorldContext, GameInstance, false);
+
+	// Set the overlay widget, to avoid an ensure
+	TSharedRef<SOverlay> DudOverlay = SNew(SOverlay);
+
+	NewViewport->SetViewportOverlayWidget(nullptr, DudOverlay);
+
+	// Set the internal FViewport, for the new game viewport, to avoid another bit of auto-exit code
+	NewViewport->Viewport = new FDummyViewport(NewViewport);
+	
+	// Set the world context game viewport, to match the newly created viewport, in order to prevent crashes
+	WorldContext->GameViewport = NewViewport;
+}
+
 
 void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded,  ELevelStreamingState PrevState, ELevelStreamingState NewState)
 {
@@ -36,7 +188,7 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 			UWorld* LevelOuterWorld = LevelIfLoaded->GetTypedOuter<UWorld>();
 			// sanity check that tile world is not our main world
 			check(LevelOuterWorld != World);
-			LevelOuterWorld->ClearFlags(RF_Standalone);
+			LevelOuterWorld->ClearFlags(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
 #endif
 	}
@@ -44,6 +196,7 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 
 FAutomationWorld::~FAutomationWorld()
 {
+	check(IsValid(World));
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.RemoveAll(this);
 	
 	if (World->bBegunPlay)
@@ -51,7 +204,7 @@ FAutomationWorld::~FAutomationWorld()
 		RouteEndPlay();
 	}
 
-	if (UGameInstance* GameInstance = World->GetGameInstance())
+	if (GameInstance != nullptr)
 	{
 		GameInstance->Shutdown();
 	}
@@ -59,143 +212,123 @@ FAutomationWorld::~FAutomationWorld()
 	GEngine->ShutdownWorldNetDriver(World);
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
-	
-	WorldContext = nullptr;
+
 	World = nullptr;
+	WorldContext = nullptr;
+	GameInstance = nullptr;
+#if !ALLOW_GAME_INSTANCE_REUSE
+	if (SharedGameInstance != nullptr)
+	{
+		SharedGameInstance->RemoveFromRoot();
+		SharedGameInstance = nullptr;
+	}
+#endif
 
 	GEngine->ForceGarbageCollection();
 	GFrameCounter = InitialFrameCounter;
+	GWorld = PrevGWorld;
 
 	WorldSubsystems.Empty();
 	GameInstanceSubsystems.Empty();
 	
-	bRunningAutomationWorld = false;
+	bExists = false;
 }
 
 FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitParams& InitParams)
 {
-	if (IsRunningAutomationWorld())
+	if (Exists())
 	{
-		UE_LOG(LogTemp, Fatal, TEXT("Tring to create second automation world"));
+		UE_LOG(LogAutomationWorld, Fatal, TEXT("%s: Tring to create second automation world"), *FString(__FUNCTION__));
+		return nullptr;
 	}
 
-	FAutomationWorldPtr AutomationWorld = MakeShareable(new FAutomationWorld());
+	UWorld* NewWorld = nullptr;
+	if (InitParams.HasWorldPackage())
+	{
+		if (!FPackageName::IsValidLongPackageName(InitParams.WorldPackage))
+		{
+			// world package name is ill formed
+			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Specified package name %s is not a valid long package name"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+			return nullptr;
+		}
+		
+		if (!FPackageName::DoesPackageExist(InitParams.WorldPackage))
+		{
+			// world package doesn't exist on disk
+			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Specified package name %s doesn't exist on disk"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+			return nullptr;
+		}
 
-	AutomationWorld->InitParams = InitParams;
-	AutomationWorld->InitValues
-	.SetDefaultGameMode(InitParams.DefaultGameMode)
-	.InitializeScenes(!!(InitParams.InitValues & EWorldInitType::InitScene))
-	.AllowAudioPlayback(!!(InitParams.InitValues & EWorldInitType::InitAudio))
-	.RequiresHitProxies(!!(InitParams.InitValues & EWorldInitType::InitHitProxy))
-	.CreatePhysicsScene(!!(InitParams.InitValues & EWorldInitType::InitPhysics))
-	.CreateNavigation(!!(InitParams.InitValues & EWorldInitType::InitNavigation))
-	.CreateAISystem(!!(InitParams.InitValues & EWorldInitType::InitAI))
-	.ShouldSimulatePhysics(!!(InitParams.InitValues & EWorldInitType::InitWeldedBodies))
-	.EnableTraceCollision(!!(InitParams.InitValues & EWorldInitType::InitCollision))
-	.SetTransactional(false) // @todo: does transactional ever matters for game worlds?
-	.CreateFXSystem(!!(InitParams.InitValues & EWorldInitType::InitFX))
-	.CreateWorldPartition(!!(InitParams.InitValues & EWorldInitType::InitWorldPartition));
+		FName WorldPackageName{InitParams.WorldPackage};
+		UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageName) = InitParams.WorldType;
+		
+		// const uint32 LoadFlags = InitParams.LoadFlags & (InitParams.WorldPackage ? LOAD_PackageForPIE : LOAD_None);
+		const uint32 LoadFlags = LOAD_None;
+		UPackage* WorldPackage = LoadPackage(nullptr, *InitParams.WorldPackage, LoadFlags);
+
+		UWorld::WorldTypePreLoadMap.Remove(WorldPackageName);
+
+		if (WorldPackage == nullptr)
+		{
+			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Failed to load package %s"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+		}
+		
+		NewWorld = UWorld::FindWorldInPackage(WorldPackage);
+	}
 	
-	if (!!(InitParams.InitValues & EWorldInitType::CreateGameInstance))
+	bool bWithGameInstance = !!(InitParams.InitFlags & EWorldInitFlags::CreateGameInstance);
+	if (NewWorld == nullptr)
 	{
-		CreateGameInstance(*AutomationWorld);
-	}
-	else
-	{
-		UWorld* World = UWorld::CreateWorld(InitParams.WorldType, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &AutomationWorld->InitValues, true);
-		AutomationWorld->World = World;
-
-		// invoke callbacks that should happen before world is fully initialized
-		if (InitParams.InitWorld)
+		UPackage* WorldPackage = nullptr;
+		if (bWithGameInstance)
 		{
-			Invoke(InitParams.InitWorld, AutomationWorld->GetWorld());
-		}
-		if (InitParams.InitWorldSettings)
-		{
-			Invoke(InitParams.InitWorldSettings, AutomationWorld->GetWorld()->GetWorldSettings());
+			static uint32 PackageNameCounter = 0;
+			// create unique package name for an empty world. Add /Temp/ prefix to avoid "package always doesn't exist" warning
+			const FName PackageName = *FString::Printf(TEXT("/Temp/%s%d"), TEXT("AutomationWorld"), PackageNameCounter++);
+			/** */
+			WorldPackage = NewObject<UPackage>(nullptr, PackageName, RF_Transient);
+			// mark as map package
+			WorldPackage->ThisContainsMap();
+			// add PlayInEditor flag to disable dirtying world package
+			WorldPackage->SetPackageFlags(PKG_PlayInEditor);
 		}
 
-		// finish world initialization
-		World->InitWorld(AutomationWorld->InitValues);
-		World->PersistentLevel->UpdateModelComponents();
-        World->UpdateWorldComponents(true, false);
-
-		AutomationWorld->WorldContext = &GEngine->CreateNewWorldContext(InitParams.WorldType);
-		AutomationWorld->WorldContext->SetCurrentWorld(AutomationWorld->World);
+		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
+		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, NAME_None, WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
 	}
 
-	if (!!(InitParams.InitValues & EWorldInitType::StartPlay))
+	if (NewWorld == nullptr)
 	{
-		AutomationWorld->RouteStartPlay();
+		UE_LOG(LogAutomationWorld, Error, TEXT("%s: Failed to create world for automation."), *FString(__FUNCTION__));
+		return nullptr;
 	}
 
-	if (!!(InitParams.InitValues & EWorldInitType::CreateLocalPlayer))
-	{
-		AutomationWorld->GetOrCreatePrimaryPlayer();
-	}
+	FAutomationWorldPtr AutomationWorld = MakeShareable(new FAutomationWorld(NewWorld, InitParams));
 	
 	return AutomationWorld;
 }
 
-FAutomationWorldPtr FAutomationWorld::CreateGameWorld(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitType InitValues)
+FAutomationWorldPtr FAutomationWorld::CreateGameWorld(EWorldInitFlags InitFlags)
 {
-	if (IsRunningAutomationWorld())
-	{
-		UE_LOG(LogTemp, Fatal, TEXT("Tring to create second automation world"));
-	}
-
-	FAutomationWorldInitParams InitParams;
-	InitParams.WorldType = EWorldType::Game;
-	InitParams.DefaultGameMode = DefaultGameMode;
-	InitParams.InitValues = InitValues;
-
+	FAutomationWorldInitParams InitParams{EWorldType::Game, InitFlags};
 	return CreateWorld(InitParams);
 }
 
-UAutomationGameInstance* FAutomationWorld::CreateGameInstance(FAutomationWorld& MinimalWorld)
+FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
 {
-	UAutomationGameInstance* GameInstance = nullptr;
-	for (const FWorldContext& WorldContext: GEngine->GetWorldContexts())
-	{
-		if (WorldContext.WorldType == EWorldType::Game)
-		{
-			if (UAutomationGameInstance* OtherGameInstance = Cast<UAutomationGameInstance>(WorldContext.OwningGameInstance))
-			{
-				GameInstance = OtherGameInstance;
-				break;
-			}
-		}
-	}
-		
-	if (GameInstance == nullptr)
-	{
-		GameInstance = NewObject<UAutomationGameInstance>(GEngine, NAME_None, RF_Transient);
-	}
-	check(GameInstance);
-
-	GameInstance->DefaultGameModeClass = MinimalWorld.InitParams.DefaultGameMode;
-		
-	GameInstance->InitializeForAutomation(MinimalWorld.InitParams, MinimalWorld.InitValues);
-
-	MinimalWorld.World = GameInstance->GetWorld();
-	MinimalWorld.WorldContext = GameInstance->GetWorldContext();
-
-	return GameInstance;
+	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithGameInstance | InitFlags, DefaultGameMode};
+	return CreateWorld(InitParams);
 }
 
-FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode)
+FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
 {
-	return CreateGameWorld(DefaultGameMode, EWorldInitType::WithGameInstance);
+	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithLocalPlayer | InitFlags, DefaultGameMode};
+	return CreateWorld(InitParams);
 }
 
-FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode)
+bool FAutomationWorld::Exists()
 {
-	return CreateGameWorld(DefaultGameMode, EWorldInitType::WithGameInstance | EWorldInitType::WithLocalPlayer);
-}
-
-bool FAutomationWorld::IsRunningAutomationWorld()
-{
-	return bRunningAutomationWorld;
+	return bExists;
 }
 
 UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass)
@@ -240,16 +373,26 @@ ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer()
 ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 {
 	check(World && WorldContext);
-
-	UGameInstance* GameInstance = World->GetGameInstance();
-	const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
 	
-	FString Error;
-	ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, true);
+	if (GameInstance != nullptr)
+	{
+		// GameInstance, GameMode and GameSession are required to create a LocalPlayer/PlayerController pair
+		if (auto GameMode = World->GetAuthGameMode(); GameMode != nullptr && GameMode->GameSession != nullptr)
+		{
+			// @todo: check World->bBegunPlay as well?
 
-	checkf(Error.IsEmpty(), TEXT("%s"), *Error);
+			const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
+	
+			FString Error;
+			ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, true);
 
-	return LocalPlayer;
+			checkf(Error.IsEmpty(), TEXT("%s"), *Error);
+
+			return LocalPlayer;
+		}
+	}
+	
+	return nullptr;
 }
 
 void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
@@ -263,21 +406,13 @@ void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
 
 void FAutomationWorld::RouteStartPlay() const
 {
-	check(World->bIsWorldInitialized);
+	check(World && World->bIsWorldInitialized);
 	if (World->bBegunPlay)
 	{
 		return;
 	}
-
+	
 	FURL URL{};
-	if (InitParams.DefaultGameMode != nullptr)
-	{
-		if (UGameInstance* GameInstance = World->GetGameInstance())
-		{
-			World->SetGameMode(URL);
-		}
-	}
-
 	World->InitializeActorsForPlay(URL);
 
 	// call OnWorldBeginPlay for world subsystems and StartPlay for GameMode
@@ -347,4 +482,9 @@ UWorld* FAutomationWorld::GetWorld() const
 FWorldContext* FAutomationWorld::GetWorldContext() const
 {
 	return WorldContext;
+}
+
+UGameInstance* FAutomationWorld::GetGameInstance() const
+{
+	return GameInstance;
 }

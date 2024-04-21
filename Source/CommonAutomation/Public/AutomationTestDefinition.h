@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#if WITH_AUTOMATION_WORKER
 #define BEGIN_DEFINE_CUSTOM_SPEC_PRIVATE( TClass, TBaseClass, PrettyName, TFlags, FileName, LineNumber ) \
 	class TClass : public TBaseClass \
 	{ \
@@ -63,13 +64,24 @@
 		TClass TClass##AutomationTestInstance( TEXT(#TClass) ); \
 	}
 
+#define BEGIN_SIMPLE_AUTOMATION_TEST(TClass, PrettyName, TFlags) \
+	BEGIN_CUSTOM_SIMPLE_AUTOMATION_TEST_PRIVATE(TClass, FAutomationTestBase, PrettyName, TFlags, __FILE__, __LINE__)
+
+#define END_SIMPLE_AUTOMATION_TEST(TClass) \
+	}; \
+	namespace \
+	{ \
+		TClass TClass##AutomationTestInstance( TEXT(#TClass) ); \
+	}
+
 #define BEGIN_DEFINE_CUSTOM_SPEC(TClass, TBaseClass, PrettyName, TFlags) \
 	BEGIN_DEFINE_CUSTOM_SPEC_PRIVATE(TClass, TBaseClass, PrettyName, TFlags, __FILE__, __LINE__)
 
 #define END_DEFINE_CUSTOM_SPEC(TClass) \
-	};\
-	namespace\
-	{\
-	TClass TClass##AutomationSpecInstance( TEXT(#TClass) );\
+	}; \
+	namespace \
+	{ \
+		TClass TClass##AutomationSpecInstance( TEXT(#TClass) ); \
 	}
-	
+
+#endif
