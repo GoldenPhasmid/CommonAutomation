@@ -64,6 +64,9 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 
 	/** World package to load */
 	FString WorldPackage{};
+
+	/** world load flags, used if WorldPackage is set. Quiet by default */
+	ELoadFlags LoadFlags = ELoadFlags::LOAD_Quiet;
 	
 	/** World initialization flags */
 	EWorldInitFlags InitFlags = EWorldInitFlags::None;
@@ -93,13 +96,17 @@ public:
 	 */
 	static FAutomationWorldPtr CreateWorld(const FAutomationWorldInitParams& InitParams);
 	
-	/**
-	 * Create world for automation tests
-	 * @DefaultGameMode world type to create
-	 * @InitValues whether perform world initialization and route BeginPlay
-	 * @return minimal world
-	 */
+	/** Create empty game world and initialize it */
 	static FAutomationWorldPtr CreateGameWorld(EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+
+	/**
+	 * Load specified world as a game world and initialize it
+	 * @WorldPackage long package name pointed to a world asset
+	 */
+	static FAutomationWorldPtr LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+
+	/** Load specified world as a game world and initialize it */
+	static FAutomationWorldPtr LoadGameWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
 	/** Creates game world with game instance and game mode, immediately routes start play */
 	static FAutomationWorldPtr CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);

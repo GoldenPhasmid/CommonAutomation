@@ -5,6 +5,7 @@
 #include "EngineUtils.h"
 #include "GameInstanceAutomationSupport.h"
 #include "GameMapsSettings.h"
+#include "AssetRegistry/AssetRegistryHelpers.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameModeBase.h"
 #include "Streaming/LevelStreamingDelegates.h"
@@ -90,6 +91,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
 {
 	World = InWorld;
+	World->AddToRoot();
 	World->SetGameInstance(GameInstance);
 	
 	// Step 1: swap GWorld to point to a newly created world
@@ -100,7 +102,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	WorldContext = &GEngine->CreateNewWorldContext(InitParams.WorldType);
 	WorldContext->SetCurrentWorld(World);
 	WorldContext->OwningGameInstance = GameInstance;
-	if (GameInstance)
+	if (GameInstance != nullptr)
 	{
 		// notify game instance that it is initialized for automation (primarily to set world context)
 		CastChecked<IGameInstanceAutomationSupport>(GameInstance)->InitForAutomation(WorldContext);
@@ -108,7 +110,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	
 	// Step 3: initialize world settings
 	AWorldSettings* WorldSettings = World->GetWorldSettings();
-	if (InitParams.WorldPackage.IsEmpty() && InitParams.DefaultGameMode)
+	if (!InitParams.HasWorldPackage() && InitParams.DefaultGameMode)
 	{
 		// override default game mode if the world is created and not loaded
 		WorldSettings->DefaultGameMode = InitParams.DefaultGameMode;
@@ -119,6 +121,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	InitParams.InitWorldSettings.ExecuteIfBound(WorldSettings);
 	
 	// Step 5: finish world initialization (see FScopedEditorWorld::Init)
+	World->WorldType = InitParams.WorldType;
 	World->InitWorld(InitParams.CreateWorldInitValues());
 	if (GameInstance != nullptr)
 	{
@@ -199,7 +202,7 @@ FAutomationWorld::~FAutomationWorld()
 	check(IsValid(World));
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.RemoveAll(this);
 	
-	if (World->bBegunPlay)
+	if (World->GetBegunPlay())
 	{
 		RouteEndPlay();
 	}
@@ -243,6 +246,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	}
 
 	UWorld* NewWorld = nullptr;
+	// load game world flow
 	if (InitParams.HasWorldPackage())
 	{
 		if (!FPackageName::IsValidLongPackageName(InitParams.WorldPackage))
@@ -259,13 +263,9 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 			return nullptr;
 		}
 
-		FName WorldPackageName{InitParams.WorldPackage};
+		const FName WorldPackageName{InitParams.WorldPackage};
 		UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageName) = InitParams.WorldType;
-		
-		// const uint32 LoadFlags = InitParams.LoadFlags & (InitParams.WorldPackage ? LOAD_PackageForPIE : LOAD_None);
-		const uint32 LoadFlags = LOAD_None;
-		UPackage* WorldPackage = LoadPackage(nullptr, *InitParams.WorldPackage, LoadFlags);
-
+		UPackage* WorldPackage = LoadPackage(nullptr, *InitParams.WorldPackage, InitParams.LoadFlags);
 		UWorld::WorldTypePreLoadMap.Remove(WorldPackageName);
 
 		if (WorldPackage == nullptr)
@@ -274,6 +274,11 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 		}
 		
 		NewWorld = UWorld::FindWorldInPackage(WorldPackage);
+		if (NewWorld == nullptr)
+		{
+			NewWorld = UWorld::FollowWorldRedirectorInPackage(WorldPackage);
+		}
+		check(NewWorld);
 	}
 	
 	bool bWithGameInstance = !!(InitParams.InitFlags & EWorldInitFlags::CreateGameInstance);
@@ -311,6 +316,24 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 FAutomationWorldPtr FAutomationWorld::CreateGameWorld(EWorldInitFlags InitFlags)
 {
 	FAutomationWorldInitParams InitParams{EWorldType::Game, InitFlags};
+	return CreateWorld(InitParams);
+}
+
+FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
+{
+	FAutomationWorldInitParams InitParams{EWorldType::Game,InitFlags};
+	InitParams.WorldPackage = WorldPackage;
+
+	return CreateWorld(InitParams);
+}
+
+FAutomationWorldPtr FAutomationWorld::LoadGameWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags)
+{
+	UAssetRegistryHelpers::FixupRedirectedAssetPath(WorldPath);
+	
+	FAutomationWorldInitParams InitParams{EWorldType::Game,InitFlags};
+	InitParams.WorldPackage = WorldPath.GetLongPackageName();
+	
 	return CreateWorld(InitParams);
 }
 
@@ -407,7 +430,7 @@ void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
 void FAutomationWorld::RouteStartPlay() const
 {
 	check(World && World->bIsWorldInitialized);
-	if (World->bBegunPlay)
+	if (World->GetBegunPlay())
 	{
 		return;
 	}
@@ -431,12 +454,12 @@ void FAutomationWorld::RouteStartPlay() const
 		WorldSettings->NotifyBeginPlay();
 	}
 	
-	check(World->bBegunPlay);
+	check(World->GetBegunPlay());
 }
 
 void FAutomationWorld::RouteEndPlay() const
 {
-	if (!World->bBegunPlay)
+	if (!World->GetBegunPlay())
 	{
 		return;
 	}
@@ -447,7 +470,7 @@ void FAutomationWorld::RouteEndPlay() const
 		It->RouteEndPlay(EEndPlayReason::EndPlayInEditor);
 	}
 
-	World->bBegunPlay = false;
+	World->SetBegunPlay(false);
 }
 
 void FAutomationWorld::TickWorld(int32 NumFrames)
