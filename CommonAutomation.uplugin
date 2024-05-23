@@ -18,6 +18,11 @@
 			"Name": "CommonAutomation",
 			"Type": "DeveloperTool",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "CommonAutomationRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
 		}
 	]
 }

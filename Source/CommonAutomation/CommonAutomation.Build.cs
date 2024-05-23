@@ -26,6 +26,7 @@ public class CommonAutomation : ModuleRules
 				"NavigationSystem",
 				"Slate",
 				"SlateCore",
+				"CommonAutomationRuntime",
 			}
 		);
 	}

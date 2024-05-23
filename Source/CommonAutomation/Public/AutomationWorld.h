@@ -174,8 +174,6 @@ public:
 
 private:
 
-	
-
 	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
 	FAutomationWorld(UWorld* NewWorld, const FAutomationWorldInitParams& InitParams);

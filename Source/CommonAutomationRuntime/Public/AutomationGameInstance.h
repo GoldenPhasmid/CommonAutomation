@@ -9,8 +9,13 @@
 struct FAutomationWorldInitParams;
 class AGameModeBase;
 
+/**
+ *
+ * Games can either subclass UAutomationGameInstance or implement IGameInstanceAutomationSupport interface to
+ * use automation world functionality with game instance
+ */
 UCLASS()
-class COMMONAUTOMATION_API UAutomationGameInstance: public UGameInstance, public IGameInstanceAutomationSupport
+class COMMONAUTOMATIONRUNTIME_API UAutomationGameInstance: public UGameInstance, public IGameInstanceAutomationSupport
 {
 	GENERATED_BODY()
 public:

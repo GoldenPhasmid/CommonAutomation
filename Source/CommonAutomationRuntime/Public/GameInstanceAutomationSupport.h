@@ -12,7 +12,7 @@ public:
 	
 };
 
-class IGameInstanceAutomationSupport
+class COMMONAUTOMATIONRUNTIME_API IGameInstanceAutomationSupport
 {
 	GENERATED_BODY()
 public:
