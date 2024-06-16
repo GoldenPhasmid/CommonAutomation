@@ -5,7 +5,7 @@
 #include "GameInstanceAutomationSupport.generated.h"
 
 UINTERFACE()
-class UGameInstanceAutomationSupport: public UInterface
+class COMMONAUTOMATIONRUNTIME_API UGameInstanceAutomationSupport: public UInterface
 {
 	GENERATED_BODY()
 public:

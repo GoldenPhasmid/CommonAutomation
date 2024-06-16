@@ -22,11 +22,12 @@ public class CommonAutomation : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
-				"EngineSettings",
-				"NavigationSystem",
 				"Slate",
 				"SlateCore",
+				"NavigationSystem",
+				"EngineSettings",
 				"CommonAutomationRuntime",
+				"AssetRegistry",
 			}
 		);
 	}
