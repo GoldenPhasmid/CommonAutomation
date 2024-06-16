@@ -85,6 +85,13 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	static FAutomationWorldInitParams WithLocalPlayer;
 };
 
+/**
+ * RAII wrapper to create, initialize and destroy a world. Can be used to test various levels in Game mode and Editor mode.
+ * It is designed to run in a single automation test scope and destroyed after test has finished.
+ * Automation world should not be stored or explicitly destroyed by calling Reset when the test has finished. You cannot
+ * create multiple instances of an automation world by design, you will get an assertion
+ * Sets GWorld and other global properties to try to behave as close as possible to the real world in PIE/Game
+ */
 class COMMONAUTOMATION_API FAutomationWorld
 {
 public:
@@ -95,25 +102,28 @@ public:
 	 * @return minimal world
 	 */
 	static FAutomationWorldPtr CreateWorld(const FAutomationWorldInitParams& InitParams);
-	
-	/** Create empty game world and initialize it */
+
+	/** Create an empty game world and initialize it */
 	static FAutomationWorldPtr CreateGameWorld(EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+	
+	/** Creates a game world with game instance and game mode, immediately routes start play */
+	static FAutomationWorldPtr CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
+
+	/** Creates a game world with local player (meaning game instance and game mode as well), immediately routes start play */
+	static FAutomationWorldPtr CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
 
 	/**
 	 * Load specified world as a game world and initialize it
-	 * @WorldPackage long package name pointed to a world asset
+	 * @WorldPackage long package name pointed to a world asset, for example /Game/Maps/Startup
 	 */
 	static FAutomationWorldPtr LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 
-	/** Load specified world as a game world and initialize it */
+	/**
+	 * Load specified world as a game world and initialize it
+	 * @WorldPath soft world asset, for example /Game/Maps/Startup
+	 */
 	static FAutomationWorldPtr LoadGameWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
-	/** Creates game world with game instance and game mode, immediately routes start play */
-	static FAutomationWorldPtr CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
-
-	/** Creates game world with local player (meaning game instance and game mode as well), immediately routes start play */
-	static FAutomationWorldPtr CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode = nullptr, EWorldInitFlags InitFlags = EWorldInitFlags::None);
-
 	template <typename TGameMode>
 	static FAutomationWorldPtr CreateGameWorldWithGameInstance(EWorldInitFlags InitFlags = EWorldInitFlags::None)
 	{
@@ -125,6 +135,21 @@ public:
 	{
 		return CreateGameWorldWithPlayer(TGameMode::StaticClass(), InitFlags);
 	}
+	
+	/** Creates an editor world and initializes it */
+	static FAutomationWorldPtr CreateEditorWorld(EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+
+	/**
+	 * Load specified world as an editor world and initialize it
+	 * @WorldPackage long package name pointed to a world asset, for example /Game/Maps/Startup
+	 */
+	static FAutomationWorldPtr LoadEditorWorld(const FString& WorldPackage, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+
+	/**
+	 * Load specified world as an editor world and initialize it
+	 * @WorldPath soft world asset, for example /Game/Maps/Startup
+	 */
+	static FAutomationWorldPtr LoadEditorWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
 	/** @return whether automation world has been created */
 	static bool Exists();
@@ -189,18 +214,22 @@ private:
 	
 	void CreateGameInstance();
 	void CreateViewportClient();
-	
+
+	const TArray<UWorldSubsystem*>& GetWorldSubsystems() const;
+
 	UWorld* World = nullptr;
 	FWorldContext* WorldContext = nullptr;
 	UGameInstance* GameInstance = nullptr;
+	/** cached tick type, different for game and editor world */
+	ELevelTick TickType = LEVELTICK_All;
 
 	/** GWorld value before this automation world was created */
 	UWorld* PrevGWorld = nullptr;
 	/** GFrameCounter value before this automation world was created */
 	uint64 InitialFrameCounter = 0;
-
-	TArray<TObjectPtr<UWorldSubsystem>> WorldSubsystems;
-	TArray<TObjectPtr<UGameInstanceSubsystem>> GameInstanceSubsystems;
+	
+	FSubsystemCollection<UWorldSubsystem> WorldSubsystemCollection;
+	FSubsystemCollection<UGameInstanceSubsystem> GameInstanceSubsystemCollection;
 	
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;

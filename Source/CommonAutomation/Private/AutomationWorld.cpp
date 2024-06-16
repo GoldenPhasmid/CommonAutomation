@@ -62,6 +62,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	// @note: use fallback game instance to create game mode? Don't create game instance if not explicitly specified?
 	if (InitParams.CreateGameInstance() || InitParams.DefaultGameMode != nullptr)
 	{
+		check(InitParams.WorldType == EWorldType::Game);
 		CreateGameInstance();
 	}
 
@@ -71,6 +72,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	// create viewport client if game instance is specified
 	if (GameInstance != nullptr && WorldContext != nullptr)
 	{
+		check(InitParams.WorldType == EWorldType::Game);
 		CreateViewportClient();
 	}
 
@@ -122,6 +124,8 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	
 	// Step 5: finish world initialization (see FScopedEditorWorld::Init)
 	World->WorldType = InitParams.WorldType;
+	// tick viewports only in editor worlds
+	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
 	World->InitWorld(InitParams.CreateWorldInitValues());
 	if (GameInstance != nullptr)
 	{
@@ -174,6 +178,11 @@ void FAutomationWorld::CreateViewportClient()
 	WorldContext->GameViewport = NewViewport;
 }
 
+const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
+{
+	return WorldSubsystemCollection.GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
+}
+
 
 void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded,  ELevelStreamingState PrevState, ELevelStreamingState NewState)
 {
@@ -207,11 +216,18 @@ FAutomationWorld::~FAutomationWorld()
 		RouteEndPlay();
 	}
 
+	// shutdown game instance
 	if (GameInstance != nullptr)
 	{
 		GameInstance->Shutdown();
 	}
-	
+
+	// deinitialize world subsystems
+	WorldSubsystemCollection.Deinitialize();
+	// deinitialize game instance subsystems
+	GameInstanceSubsystemCollection.Deinitialize();
+
+	// destroy world and world context
 	GEngine->ShutdownWorldNetDriver(World);
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
@@ -227,12 +243,10 @@ FAutomationWorld::~FAutomationWorld()
 	}
 #endif
 
-	GEngine->ForceGarbageCollection();
+	// restore globals and garbage collect the world
 	GFrameCounter = InitialFrameCounter;
 	GWorld = PrevGWorld;
-
-	WorldSubsystems.Empty();
-	GameInstanceSubsystems.Empty();
+	GEngine->ForceGarbageCollection();
 	
 	bExists = false;
 }
@@ -319,6 +333,24 @@ FAutomationWorldPtr FAutomationWorld::CreateGameWorld(EWorldInitFlags InitFlags)
 	return CreateWorld(InitParams);
 }
 
+FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
+{
+	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithGameInstance | InitFlags, DefaultGameMode};
+	return CreateWorld(InitParams);
+}
+
+FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
+{
+	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithLocalPlayer | InitFlags, DefaultGameMode};
+	return CreateWorld(InitParams);
+}
+
+FAutomationWorldPtr FAutomationWorld::CreateEditorWorld(EWorldInitFlags InitFlags)
+{
+	FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
+	return CreateWorld(InitParams);
+}
+
 FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
 {
 	FAutomationWorldInitParams InitParams{EWorldType::Game,InitFlags};
@@ -337,15 +369,21 @@ FAutomationWorldPtr FAutomationWorld::LoadGameWorld(FSoftObjectPath WorldPath, E
 	return CreateWorld(InitParams);
 }
 
-FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
+FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithGameInstance | InitFlags, DefaultGameMode};
+	FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
+	InitParams.WorldPackage = WorldPackage;
+
 	return CreateWorld(InitParams);
 }
 
-FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
+FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithLocalPlayer | InitFlags, DefaultGameMode};
+	UAssetRegistryHelpers::FixupRedirectedAssetPath(WorldPath);
+	
+	FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
+	InitParams.WorldPackage = WorldPath.GetLongPackageName();
+
 	return CreateWorld(InitParams);
 }
 
@@ -356,35 +394,70 @@ bool FAutomationWorld::Exists()
 
 UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass)
 {
-	static FSubsystemCollection<UGameInstanceSubsystem> DummyCollection;
+	check(World && World->bIsWorldInitialized);
+	if (GameInstance == nullptr)
+	{
+		return nullptr;
+	}
 	
-	UGameInstance* Outer = World->GetGameInstance();
-	UGameInstanceSubsystem* Subsystem = NewObject<UGameInstanceSubsystem>(Outer, SubsystemClass);
-	Subsystem->Initialize(DummyCollection);
+	UGameInstanceSubsystem* Subsystem = GameInstance->GetSubsystemBase(SubsystemClass);
+	if (Subsystem == nullptr)
+	{
+		Subsystem = GameInstanceSubsystemCollection.GetSubsystem(SubsystemClass);
+	}
 
-	GameInstanceSubsystems.Add(Subsystem);
+	if (Subsystem == nullptr)
+	{
+		// forbid creating subsystems after begin play
+		checkf(!World->HasBegunPlay(), TEXT("Trying to create subsystem after BeginPlay was called."));
+
+		// create subsystem only if it should be created
+		if (const UGameInstanceSubsystem* CDO = GetDefault<UGameInstanceSubsystem>(SubsystemClass); CDO->ShouldCreateSubsystem(GameInstance))
+		{
+			Subsystem = NewObject<UGameInstanceSubsystem>(GameInstance, SubsystemClass);
+			Subsystem->Initialize(GameInstanceSubsystemCollection);
+		}
+	}
 
 	return Subsystem;
 }
 
 UWorldSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass)
 {
-	static FSubsystemCollection<UWorldSubsystem> DummyCollection;
+	check(World && World->bIsWorldInitialized);
+	
+	UWorldSubsystem* Subsystem = World->GetSubsystemBase(SubsystemClass);
+	if (Subsystem == nullptr)
+	{
+		Subsystem = WorldSubsystemCollection.GetSubsystem(SubsystemClass);
+	}
+	
+	if (Subsystem == nullptr)
+	{
+		// forbid creating subsystems after begin play
+		checkf(!World->HasBegunPlay(), TEXT("Trying to create subsystem after BeginPlay was called."));
 
-	UWorld* Outer = World;
-	UWorldSubsystem* Subsystem = NewObject<UWorldSubsystem>(Outer, SubsystemClass);
-	Subsystem->Initialize(DummyCollection);
-	Subsystem->PostInitialize();
-	Subsystem->OnWorldComponentsUpdated(*World);
-
-	WorldSubsystems.Add(Subsystem);
-
+		// create subsystem only if it should be created for a given world
+		if (const UWorldSubsystem* CDO = GetDefault<UWorldSubsystem>(SubsystemClass); CDO->ShouldCreateSubsystem(World))
+		{
+			Subsystem = NewObject<UWorldSubsystem>(World, SubsystemClass);
+			Subsystem->Initialize(WorldSubsystemCollection);
+			Subsystem->PostInitialize();
+			Subsystem->OnWorldComponentsUpdated(*World);
+		}
+	}
+	
 	return Subsystem;
 }
 
 ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer()
 {
 	check(World && WorldContext);
+	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	{
+		return nullptr;
+	}
+	
 	if (ULocalPlayer* PrimaryPlayer = GEngine->GetFirstGamePlayer(World))
 	{
 		return PrimaryPlayer;
@@ -396,6 +469,10 @@ ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer()
 ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 {
 	check(World && WorldContext);
+	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	{
+		return nullptr;
+	}
 	
 	if (GameInstance != nullptr)
 	{
@@ -420,6 +497,11 @@ ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 
 void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
 {
+	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	{
+		return;
+	}
+	
 	const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
 	if (LocalPlayers.Contains(LocalPlayer))
 	{
@@ -430,6 +512,11 @@ void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
 void FAutomationWorld::RouteStartPlay() const
 {
 	check(World && World->bIsWorldInitialized);
+	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	{
+		return;
+	}
+	
 	if (World->GetBegunPlay())
 	{
 		return;
@@ -442,7 +529,7 @@ void FAutomationWorld::RouteStartPlay() const
 	World->BeginPlay();
 
 	// call OnWorldBeginPlay for additional world subsystems
-	for (UWorldSubsystem* WorldSubsystem : WorldSubsystems)
+	for (UWorldSubsystem* WorldSubsystem : GetWorldSubsystems())
 	{
 		WorldSubsystem->OnWorldBeginPlay(*World);
 	}
@@ -459,6 +546,12 @@ void FAutomationWorld::RouteStartPlay() const
 
 void FAutomationWorld::RouteEndPlay() const
 {
+	check(World && World->bIsWorldInitialized);
+	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	{
+		return;
+	}
+	
 	if (!World->GetBegunPlay())
 	{
 		return;
@@ -478,10 +571,10 @@ void FAutomationWorld::TickWorld(int32 NumFrames)
 	constexpr float DeltaTime = 1.0 / 60.0;
 	while (NumFrames > 0)
 	{
-		World->Tick(ELevelTick::LEVELTICK_All, DeltaTime);
+		World->Tick(TickType, DeltaTime);
 
 		// update external world subsystems streaming state
-		for (UWorldSubsystem* WorldSubsystem: WorldSubsystems)
+		for (UWorldSubsystem* WorldSubsystem: GetWorldSubsystems())
 		{
 			WorldSubsystem->UpdateStreamingState();
 		}
