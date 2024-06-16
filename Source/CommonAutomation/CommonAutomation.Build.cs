@@ -26,8 +26,10 @@ public class CommonAutomation : ModuleRules
 				"SlateCore",
 				"NavigationSystem",
 				"EngineSettings",
+				"DeveloperSettings",
 				"CommonAutomationRuntime",
-				"AssetRegistry",
+				"AssetRegistry", 
+				"GameProjectGeneration",
 			}
 		);
 	}
