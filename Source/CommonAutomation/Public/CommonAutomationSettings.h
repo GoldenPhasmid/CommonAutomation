@@ -30,7 +30,7 @@ struct FSubsystemContainer
 	template <typename TSubsystemType>
 	const TArray<UClass*>& GetDisabledSubsystems(const TArray<TSubclassOf<TSubsystemType>>& EnabledSubsystems) const
 	{
-		if (bDirty)
+		if (bDirty == false)
 		{
 			return DisabledSubsystems;
 		}
@@ -42,17 +42,13 @@ struct FSubsystemContainer
 		{
 			return DisabledSubsystems;
 		}
-		
-		TArray<UClass*> Copy{EnabledSubsystems};
-		Algo::Sort(Copy);
 
-		int32 Index = 0;
+		// @todo: fix O(N^2) complexity
 		for (auto It = DisabledSubsystems.CreateIterator(); It; ++It)
 		{
-			if (*It == EnabledSubsystems[Index])
+			if (EnabledSubsystems.Contains(*It))
 			{
 				It.RemoveCurrentSwap();
-				++Index;
 			}
 		}
 

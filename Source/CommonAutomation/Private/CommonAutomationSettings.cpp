@@ -90,7 +90,7 @@ bool UCommonAutomationSettings::IsProjectModuleClass(UClass* Class)
 		return GetProjectModules().Contains(ModuleName);
 	}
 
-	// @todo: log an error, we should always find a match
+	checkNoEntry();
 	return false;
 }
 
