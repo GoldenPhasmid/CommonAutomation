@@ -161,22 +161,15 @@ public:
 	UWorldSubsystem* CreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass);
 	
 	/** Create subsystem of specified type */
-	template <typename T>
+	template <
+		typename T,
+		TEMPLATE_REQUIRES(std::disjunction_v<std::is_same<T, UGameInstanceSubsystem>, std::is_same<T, UWorldSubsystem>>)
+	>
 	T* CreateSubsystem()
 	{
-		if constexpr (TIsDerivedFrom<T, UGameInstanceSubsystem>::Value)
-		{
-			return CastChecked<T>(CreateSubsystem(TSubclassOf<UGameInstanceSubsystem>{T::StaticClass()}));
-		}
-		if constexpr (TIsDerivedFrom<T, UWorldSubsystem>::Value)
-		{
-			return CastChecked<T>(CreateSubsystem(TSubclassOf<UWorldSubsystem>{T::StaticClass()}));
-		}
-		
-		checkNoEntry();
-		return nullptr;
+		return CreateSubsystem(TSubclassOf<T>{T::StaticClass()});
 	}
-
+	
 	/** create primary player for this world. If player has already been created, return it */
 	ULocalPlayer* GetOrCreatePrimaryPlayer();
 	
@@ -234,4 +227,17 @@ private:
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;
 };
+
+template <>
+FORCEINLINE UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem<UGameInstanceSubsystem>()
+{
+	return CreateSubsystem(TSubclassOf<UGameInstanceSubsystem>{UGameInstanceSubsystem::StaticClass()});
+}
+
+template <>
+FORCEINLINE UWorldSubsystem* FAutomationWorld::CreateSubsystem<UWorldSubsystem>()
+{
+	return CreateSubsystem(TSubclassOf<UWorldSubsystem>{UWorldSubsystem::StaticClass()});
+}
+
 

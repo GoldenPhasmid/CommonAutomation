@@ -9,6 +9,12 @@ public class CommonAutomation : ModuleRules
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		OptimizeCode = CodeOptimization.Never; // @todo: remove
 		
+		PrivateDefinitions.AddRange(
+			new string []
+			{
+				"REUSE_GAME_INSTANCE=0",
+			}
+		);
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{

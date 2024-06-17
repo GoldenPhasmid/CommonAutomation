@@ -1,6 +1,7 @@
 ﻿#include "AutomationWorld.h"
 
 #include "AutomationGameInstance.h"
+#include "CommonAutomationSettings.h"
 #include "DummyViewport.h"
 #include "EngineUtils.h"
 #include "GameInstanceAutomationSupport.h"
@@ -9,10 +10,34 @@
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameModeBase.h"
 #include "Streaming/LevelStreamingDelegates.h"
+#include "Subsystems/LocalPlayerSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAutomationWorld, Log, Log);
 
-#define ALLOW_GAME_INSTANCE_REUSE 0
+template <typename TSubsystemType>
+struct FScopeDisableSubsystemCreation
+{
+	FScopeDisableSubsystemCreation()
+	{
+		DisabledSubsystems = UCommonAutomationSettings::Get()->GetDisabledSubsystems<TSubsystemType>();
+		for (UClass* SubsystemClass: DisabledSubsystems)
+		{
+			SubsystemClass->ClassFlags |= CLASS_Abstract;
+		}
+	}
+
+	~FScopeDisableSubsystemCreation()
+	{
+		for (UClass* SubsystemClass: DisabledSubsystems)
+		{
+			SubsystemClass->ClassFlags &= ~CLASS_Abstract;
+		}
+	}
+
+private:
+	TArray<UClass*> DisabledSubsystems;
+};
+
 
 bool FAutomationWorld::bExists = false;
 UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
@@ -63,6 +88,8 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	if (InitParams.CreateGameInstance() || InitParams.DefaultGameMode != nullptr)
 	{
 		check(InitParams.WorldType == EWorldType::Game);
+		
+		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope;
 		CreateGameInstance();
 	}
 
@@ -126,7 +153,12 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	World->WorldType = InitParams.WorldType;
 	// tick viewports only in editor worlds
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
-	World->InitWorld(InitParams.CreateWorldInitValues());
+
+	{
+		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope;
+		World->InitWorld(InitParams.CreateWorldInitValues());
+	}
+	
 	if (GameInstance != nullptr)
 	{
 		World->SetGameMode({});
@@ -149,7 +181,7 @@ void FAutomationWorld::CreateGameInstance()
 
 		// create shared game instance
 		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, TEXT("SharedGameInstance"), RF_Transient);
-#if ALLOW_GAME_INSTANCE_REUSE
+#if REUSE_GAME_INSTANCE
 		// add to root so game instance lives between automation worlds
 		SharedGameInstance->AddToRoot();
 #endif
@@ -235,7 +267,7 @@ FAutomationWorld::~FAutomationWorld()
 	World = nullptr;
 	WorldContext = nullptr;
 	GameInstance = nullptr;
-#if !ALLOW_GAME_INSTANCE_REUSE
+#if !REUSE_GAME_INSTANCE
 	if (SharedGameInstance != nullptr)
 	{
 		SharedGameInstance->RemoveFromRoot();
@@ -482,8 +514,9 @@ ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 			// @todo: check World->bBegunPlay as well?
 
 			const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
-	
+			
 			FString Error;
+			FScopeDisableSubsystemCreation<ULocalPlayerSubsystem> Scope;
 			ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, true);
 
 			checkf(Error.IsEmpty(), TEXT("%s"), *Error);

@@ -101,7 +101,7 @@ bool FAutomationWorldFlagsTests::RunTest(const FString& Parameters)
 				return false;
 			}
 		}
-		return World->bBegunPlay;
+		return World->HasBegunPlay();
 	});
 	TestFlag(EWorldInitFlags::InitScene, [](UWorld* World) {
 		return World->Scene != nullptr;
