@@ -38,6 +38,17 @@ private:
 	TArray<UClass*> DisabledSubsystems;
 };
 
+template <typename TSubsystemType, typename T>
+FObjectSubsystemCollection<TSubsystemType>* GetSubsystemCollection(T* Owner)
+{
+	static_assert(sizeof(FObjectSubsystemCollection<TSubsystemType>) == sizeof(FSubsystemCollectionBase));
+	// @todo: this works on assumption that FSubsystemCollection is the last in object's memory layout
+	// we can't detect if it has been changed, although this part of Engine code is stable for the last n revisions
+	using TCollectionType = FObjectSubsystemCollection<TSubsystemType>;
+	constexpr int32 CollectionOffset = sizeof(T) - sizeof(TCollectionType);
+	
+	return reinterpret_cast<TCollectionType*>(reinterpret_cast<uint8*>(Owner) + CollectionOffset);
+}
 
 bool FAutomationWorld::bExists = false;
 UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
@@ -88,8 +99,6 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	if (InitParams.CreateGameInstance() || InitParams.DefaultGameMode != nullptr)
 	{
 		check(InitParams.WorldType == EWorldType::Game);
-		
-		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope;
 		CreateGameInstance();
 	}
 
@@ -157,6 +166,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	{
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope;
 		World->InitWorld(InitParams.CreateWorldInitValues());
+		WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
 	}
 	
 	if (GameInstance != nullptr)
@@ -180,6 +190,7 @@ void FAutomationWorld::CreateGameInstance()
 		}
 
 		// create shared game instance
+		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope;
 		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, TEXT("SharedGameInstance"), RF_Transient);
 #if REUSE_GAME_INSTANCE
 		// add to root so game instance lives between automation worlds
@@ -188,6 +199,7 @@ void FAutomationWorld::CreateGameInstance()
 	}
 
 	GameInstance = SharedGameInstance;
+	GameInstanceCollection = GetSubsystemCollection<UGameInstanceSubsystem>(GameInstance);
 	check(GameInstance);
 }
 
@@ -212,9 +224,8 @@ void FAutomationWorld::CreateViewportClient()
 
 const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
 {
-	return WorldSubsystemCollection.GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
+	return WorldCollection->GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
 }
-
 
 void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded,  ELevelStreamingState PrevState, ELevelStreamingState NewState)
 {
@@ -240,6 +251,8 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 
 FAutomationWorld::~FAutomationWorld()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld::DestroyWorld);
+	
 	check(IsValid(World));
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.RemoveAll(this);
 	
@@ -254,15 +267,14 @@ FAutomationWorld::~FAutomationWorld()
 		GameInstance->Shutdown();
 	}
 
-	// deinitialize world subsystems
-	WorldSubsystemCollection.Deinitialize();
-	// deinitialize game instance subsystems
-	GameInstanceSubsystemCollection.Deinitialize();
-
 	// destroy world and world context
 	GEngine->ShutdownWorldNetDriver(World);
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
+
+	// null pointers to subsystem collections
+	WorldCollection = nullptr;
+	GameInstanceCollection = nullptr;
 
 	World = nullptr;
 	WorldContext = nullptr;
@@ -291,6 +303,8 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 		return nullptr;
 	}
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld::CreateWorld);
+	
 	UWorld* NewWorld = nullptr;
 	// load game world flow
 	if (InitParams.HasWorldPackage())
@@ -427,7 +441,9 @@ bool FAutomationWorld::Exists()
 UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass)
 {
 	check(World && World->bIsWorldInitialized);
-	if (GameInstance == nullptr)
+	check(GameInstanceCollection);
+	
+	if (GameInstance == nullptr || SubsystemClass->HasAnyClassFlags(CLASS_Abstract))
 	{
 		return nullptr;
 	}
@@ -435,19 +451,15 @@ UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInsta
 	UGameInstanceSubsystem* Subsystem = GameInstance->GetSubsystemBase(SubsystemClass);
 	if (Subsystem == nullptr)
 	{
-		Subsystem = GameInstanceSubsystemCollection.GetSubsystem(SubsystemClass);
+		Subsystem = GameInstanceCollection->GetSubsystem(SubsystemClass);
 	}
 
 	if (Subsystem == nullptr)
 	{
-		// forbid creating subsystems after begin play
-		checkf(!World->HasBegunPlay(), TEXT("Trying to create subsystem after BeginPlay was called."));
-
 		// create subsystem only if it should be created
 		if (const UGameInstanceSubsystem* CDO = GetDefault<UGameInstanceSubsystem>(SubsystemClass); CDO->ShouldCreateSubsystem(GameInstance))
 		{
-			Subsystem = NewObject<UGameInstanceSubsystem>(GameInstance, SubsystemClass);
-			Subsystem->Initialize(GameInstanceSubsystemCollection);
+			Subsystem = CastChecked<UGameInstanceSubsystem>(AddAndInitializeSubsystem(GameInstanceCollection, SubsystemClass, GameInstance));
 		}
 	}
 
@@ -457,28 +469,74 @@ UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInsta
 UWorldSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass)
 {
 	check(World && World->bIsWorldInitialized);
+	check(WorldCollection);
+
+	if (SubsystemClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		return nullptr;
+	}
 	
 	UWorldSubsystem* Subsystem = World->GetSubsystemBase(SubsystemClass);
 	if (Subsystem == nullptr)
 	{
-		Subsystem = WorldSubsystemCollection.GetSubsystem(SubsystemClass);
+		Subsystem = WorldCollection->GetSubsystem(SubsystemClass);
 	}
 	
 	if (Subsystem == nullptr)
 	{
-		// forbid creating subsystems after begin play
-		checkf(!World->HasBegunPlay(), TEXT("Trying to create subsystem after BeginPlay was called."));
-
 		// create subsystem only if it should be created for a given world
 		if (const UWorldSubsystem* CDO = GetDefault<UWorldSubsystem>(SubsystemClass); CDO->ShouldCreateSubsystem(World))
 		{
-			Subsystem = NewObject<UWorldSubsystem>(World, SubsystemClass);
-			Subsystem->Initialize(WorldSubsystemCollection);
+			Subsystem = CastChecked<UWorldSubsystem>(AddAndInitializeSubsystem(WorldCollection, SubsystemClass, World));
+			
 			Subsystem->PostInitialize();
 			Subsystem->OnWorldComponentsUpdated(*World);
+			if (World->HasBegunPlay())
+			{
+				Subsystem->OnWorldBeginPlay(*World);
+			}
 		}
 	}
 	
+	return Subsystem;
+}
+
+USubsystem* FAutomationWorld::AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer)
+{
+	// This relies on FSubsystemCollectionBase having following memory alignment:
+	// vpointer
+	// FSubsystemMap SubsystemMap
+	// FSubsystemArrayMap SubsystemArrayMap
+	// Other members..
+	// If it crashes, update implementation accordingly
+	
+	using FSubsystemMap = TMap<TObjectPtr<UClass>, TObjectPtr<USubsystem>>;
+	using FSubsystemArrayMap =TMap<UClass*, TArray<USubsystem*>>;
+
+	constexpr int32 SubsystemMapOffset = sizeof(void*); // vpointer offset
+	constexpr int32 SubsystemArrayOffset = sizeof(FSubsystemMap) + SubsystemMapOffset;
+	
+	USubsystem* Subsystem = NewObject<USubsystem>(Outer, SubsystemClass);
+	
+	// This is a direct implementation from AddAndInitializeSubsystem
+	// add subsystem to the collection's subsystem map
+	FSubsystemMap* SubsystemMap = (FSubsystemMap*)(reinterpret_cast<uint8*>(Collection) + SubsystemMapOffset);
+	FSubsystemArrayMap* SubsystemArrayMap = (FSubsystemArrayMap*)(reinterpret_cast<uint8*>(Collection) + SubsystemArrayOffset);
+	
+	SubsystemMap->Add(SubsystemClass, Subsystem);
+
+	// initialize subsystem
+	Subsystem->Initialize(*Collection);
+	
+	// Add this new subsystem to any existing maps of base classes to lists of subsystems
+	for (TPair<UClass*, TArray<USubsystem*>>& Pair : *SubsystemArrayMap)
+	{
+		if (SubsystemClass->IsChildOf(Pair.Key))
+		{
+			Pair.Value.Add(Subsystem);
+		}
+	}
+
 	return Subsystem;
 }
 
@@ -560,12 +618,6 @@ void FAutomationWorld::RouteStartPlay() const
 
 	// call OnWorldBeginPlay for world subsystems and StartPlay for GameMode
 	World->BeginPlay();
-
-	// call OnWorldBeginPlay for additional world subsystems
-	for (UWorldSubsystem* WorldSubsystem : GetWorldSubsystems())
-	{
-		WorldSubsystem->OnWorldBeginPlay(*World);
-	}
 	
 	if (World->GetAuthGameMode() == nullptr)
 	{
@@ -605,12 +657,7 @@ void FAutomationWorld::TickWorld(int32 NumFrames)
 	while (NumFrames > 0)
 	{
 		World->Tick(TickType, DeltaTime);
-
-		// update external world subsystems streaming state
-		for (UWorldSubsystem* WorldSubsystem: GetWorldSubsystems())
-		{
-			WorldSubsystem->UpdateStreamingState();
-		}
+		
 		// tick streamable manager
 		FTickableGameObject::TickObjects(nullptr, LEVELTICK_All, false, DeltaTime);
 		// update level streaming, as we're not drawing viewport which usually updates it

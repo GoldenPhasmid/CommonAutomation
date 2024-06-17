@@ -1,4 +1,6 @@
 
+#include "AutomationWorldTests.h"
+
 #include "AutomationTestDefinition.h"
 #include "AutomationWorld.h"
 #include "EngineUtils.h"
@@ -13,7 +15,7 @@
 
 constexpr auto AutomationTestFlags = EAutomationTestFlags::EngineFilter | EAutomationTestFlags::EditorContext | EAutomationTestFlags::CriticalPriority;
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldBehaviorTests, "TestFramework.AutomationWorld.Behavior", AutomationTestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldBehaviorTests, "CommonAutomation.AutomationWorld.Behavior", AutomationTestFlags)
 
 bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
 {
@@ -74,7 +76,69 @@ bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-BEGIN_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests, "TestFramework.AutomationWorld.Flags", AutomationTestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldTest_WorldSubsystem, "CommonAutomation.AutomationWorld.WorldSubsystem", AutomationTestFlags)
+
+bool FAutomationWorldTest_WorldSubsystem::RunTest(const FString& Parameters)
+{
+	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorld(~EWorldInitFlags::StartPlay);
+	
+	UTestWorldSubsystem* Subsystem = WorldPtr->GetWorld()->GetSubsystem<UTestWorldSubsystem>();
+	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
+
+	UTestWorldSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
+	Subsystem = WorldPtr->CreateSubsystem<UTestWorldSubsystem>();
+	UTestWorldSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
+	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
+	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
+	UTEST_TRUE("Subsystem is post initialized", Subsystem->bPostInitialized);
+
+	UTestWorldSubsystem* OtherSubsystem = WorldPtr->GetWorld()->GetSubsystem<UTestWorldSubsystem>();
+	UTEST_EQUAL("Can receive world subsystem directly from world", Subsystem, OtherSubsystem);
+		
+	UTEST_FALSE("Subsystem has not begun play", Subsystem->bBeginPlayCalled);
+	WorldPtr->RouteStartPlay();
+	UTEST_TRUE("Subsystem has begun play", Subsystem->bBeginPlayCalled);
+
+	WorldPtr->TickWorld(1);
+	UTEST_TRUE("Subsystem updates streaming state", Subsystem->bStreamingStateUpdated);
+
+	bool bDeinitialized = false;
+	Subsystem->DeinitDelegate = FSimpleDelegate::CreateLambda([&bDeinitialized] { bDeinitialized = true; });
+
+	WorldPtr.Reset();
+	UTEST_TRUE("Subsystem is deinitialized", bDeinitialized);
+
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldTest_GameInstanceSubsystem, "CommonAutomation.AutomationWorld.GameInstanceSubsystem", AutomationTestFlags)
+
+bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Parameters)
+{
+	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance(nullptr, ~EWorldInitFlags::StartPlay);
+	UTestGameInstanceSubsystem* Subsystem = WorldPtr->GetGameInstance()->GetSubsystem<UTestGameInstanceSubsystem>();
+	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
+
+	UTestGameInstanceSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
+	Subsystem = WorldPtr->CreateSubsystem<UTestGameInstanceSubsystem>();
+	UTestGameInstanceSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
+	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
+	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
+	
+	UTestGameInstanceSubsystem* OtherSubsystem = WorldPtr->GetGameInstance()->GetSubsystem<UTestGameInstanceSubsystem>();
+	UTEST_EQUAL("Can receive game instance subsystem directly from game instance", Subsystem, OtherSubsystem);
+
+	bool bDeinitialized = false;
+	Subsystem->DeinitDelegate = FSimpleDelegate::CreateLambda([&bDeinitialized] { bDeinitialized = true; });
+
+	WorldPtr.Reset();
+	UTEST_TRUE("Subsystem is deinitialized", bDeinitialized);
+
+	
+	return !HasAnyErrors();
+}
+
+BEGIN_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests, "CommonAutomation.AutomationWorld.Flags", AutomationTestFlags)
 	void TestFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred);
 END_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests)
 

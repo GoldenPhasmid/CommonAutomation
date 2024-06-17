@@ -163,11 +163,11 @@ public:
 	/** Create subsystem of specified type */
 	template <
 		typename T,
-		TEMPLATE_REQUIRES(std::disjunction_v<std::is_same<T, UGameInstanceSubsystem>, std::is_same<T, UWorldSubsystem>>)
+		TEMPLATE_REQUIRES(TOr<TIsDerivedFrom<T, UGameInstanceSubsystem>, TIsDerivedFrom<T, UWorldSubsystem>>::Value)
 	>
 	T* CreateSubsystem()
 	{
-		return CreateSubsystem(TSubclassOf<T>{T::StaticClass()});
+		return CastChecked<T>(CreateSubsystem(TSubclassOf<T>{T::StaticClass()}), ECastCheckedType::NullAllowed);
 	}
 	
 	/** create primary player for this world. If player has already been created, return it */
@@ -198,12 +198,13 @@ public:
 	~FAutomationWorld();
 
 private:
-
+	
 	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
 	FAutomationWorld(UWorld* NewWorld, const FAutomationWorldInitParams& InitParams);
 
 	void InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams);
+	USubsystem* AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer);
 	
 	void CreateGameInstance();
 	void CreateViewportClient();
@@ -221,8 +222,8 @@ private:
 	/** GFrameCounter value before this automation world was created */
 	uint64 InitialFrameCounter = 0;
 	
-	FSubsystemCollection<UWorldSubsystem> WorldSubsystemCollection;
-	FSubsystemCollection<UGameInstanceSubsystem> GameInstanceSubsystemCollection;
+	FObjectSubsystemCollection<UWorldSubsystem>* WorldCollection = nullptr;
+	FObjectSubsystemCollection<UGameInstanceSubsystem>* GameInstanceCollection = nullptr;
 	
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;
