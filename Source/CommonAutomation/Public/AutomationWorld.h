@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "CoreMinimal.h"
 #include "Engine/World.h"
 #include "Engine/EngineTypes.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -43,12 +44,57 @@ using FAutomationWorldRef = TSharedRef<FAutomationWorld>;
 
 struct COMMONAUTOMATION_API FAutomationWorldInitParams
 {
-	FAutomationWorldInitParams(EWorldType::Type InWorldType, EWorldInitFlags InInitFlags, TSubclassOf<AGameModeBase> InGameMode = nullptr)
+	FAutomationWorldInitParams(EWorldType::Type InWorldType, EWorldInitFlags InInitFlags)
 		: WorldType(InWorldType)
 		, InitFlags(InInitFlags)
-		, DefaultGameMode(InGameMode)
 	{}
 
+	FAutomationWorldInitParams& SetGameMode(TSubclassOf<AGameModeBase> InGameMode)
+	{
+		DefaultGameMode = InGameMode;
+		return *this;
+	}
+
+	/** set world package to load */
+	FAutomationWorldInitParams& SetWorldPackage(const FString& InWorldPackage);
+	FAutomationWorldInitParams& SetWorldPackage(FSoftObjectPath InWorldPath);
+
+	template <typename T, TEMPLATE_REQUIRES(TIsDerivedFrom<T, UGameInstanceSubsystem>::Value)>
+	FAutomationWorldInitParams& EnableSubsystem()
+	{
+		GameSubsystems.Add(T::StaticClass());
+		return *this;
+	}
+
+	template <typename T, TEMPLATE_REQUIRES(TIsDerivedFrom<T, UWorldSubsystem>::Value)>
+	FAutomationWorldInitParams& EnableSubsystem()
+	{
+		WorldSubsystems.Add(T::StaticClass());
+		return *this;
+	}
+
+	template <typename T, TEMPLATE_REQUIRES(TIsDerivedFrom<T, ULocalPlayerSubsystem>::Value)>
+	FAutomationWorldInitParams& EnableSubsystem()
+	{
+		PlayerSubsystems.Add(T::StaticClass());
+		return *this;
+	}
+
+	template <typename TCallbackType>
+	FAutomationWorldInitParams& SetInitWorld(TCallbackType&& Callback)
+	{
+		InitWorld = Callback;
+		return *this;
+	}
+	
+	template <typename TCallbackType>
+	FAutomationWorldInitParams& SetInitWorldSettings(TCallbackType& Callback)
+	{
+		InitWorldSettings = Callback;
+		return *this;
+	}
+	
+	
 	/** @return world initialization values produced from this params */
 	FWorldInitializationValues CreateWorldInitValues() const;
 
@@ -74,11 +120,18 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	/** Default game mode */
 	TSubclassOf<AGameModeBase> DefaultGameMode = nullptr;
 
-	/** */
+	/** world initialization delegate */
 	TDelegate<void(UWorld*)> InitWorld;
 
 	/** */
 	TDelegate<void(AWorldSettings*)> InitWorldSettings;
+
+	/** A list of game instance subsystems that would be created as part of automation world */
+	TArray<UClass*, TInlineAllocator<4>> GameSubsystems;
+	/** A list of world subsystems that would be created as part of automation world */
+	TArray<UClass*, TInlineAllocator<4>> WorldSubsystems;
+	/** A list of local player subsystems that would be created as part of automation world */
+	TArray<UClass*, TInlineAllocator<4>> PlayerSubsystems;
 	
 	static FAutomationWorldInitParams Minimal;
 	static FAutomationWorldInitParams WithGameInstance;
@@ -122,7 +175,7 @@ public:
 	 * Load specified world as a game world and initialize it
 	 * @WorldPath soft world asset, for example /Game/Maps/Startup
 	 */
-	static FAutomationWorldPtr LoadGameWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+	static FAutomationWorldPtr LoadGameWorld(const FSoftObjectPath& WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
 	template <typename TGameMode>
 	static FAutomationWorldPtr CreateGameWorldWithGameInstance(EWorldInitFlags InitFlags = EWorldInitFlags::None)
@@ -149,25 +202,25 @@ public:
 	 * Load specified world as an editor world and initialize it
 	 * @WorldPath soft world asset, for example /Game/Maps/Startup
 	 */
-	static FAutomationWorldPtr LoadEditorWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
+	static FAutomationWorldPtr LoadEditorWorld(const FSoftObjectPath& WorldPath, EWorldInitFlags InitFlags = EWorldInitFlags::Minimal);
 	
 	/** @return whether automation world has been created */
 	static bool Exists();
 
 	/** Create and return game instance subsystem */
-	UGameInstanceSubsystem* CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass);
+	UGameInstanceSubsystem* GetOrCreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass);
 
 	/** Create and return world subsystem */
-	UWorldSubsystem* CreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass);
+	UWorldSubsystem* GetOrCreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass);
 	
 	/** Create subsystem of specified type */
 	template <
 		typename T,
 		TEMPLATE_REQUIRES(TOr<TIsDerivedFrom<T, UGameInstanceSubsystem>, TIsDerivedFrom<T, UWorldSubsystem>>::Value)
 	>
-	T* CreateSubsystem()
+	T* GetOrCreateSubsystem()
 	{
-		return CastChecked<T>(CreateSubsystem(TSubclassOf<T>{T::StaticClass()}), ECastCheckedType::NullAllowed);
+		return CastChecked<T>(GetOrCreateSubsystem(TSubclassOf<T>{T::StaticClass()}), ECastCheckedType::NullAllowed);
 	}
 	
 	/** create primary player for this world. If player has already been created, return it */
@@ -206,7 +259,7 @@ private:
 	void InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams);
 	USubsystem* AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer);
 	
-	void CreateGameInstance();
+	void CreateGameInstance(const FAutomationWorldInitParams& InitParams);
 	void CreateViewportClient();
 
 	const TArray<UWorldSubsystem*>& GetWorldSubsystems() const;
@@ -221,24 +274,28 @@ private:
 	UWorld* PrevGWorld = nullptr;
 	/** GFrameCounter value before this automation world was created */
 	uint64 InitialFrameCounter = 0;
-	
+
+	/** Cached pointer to a world subsystem collection, retrieved in a fancy way from @World */
 	FObjectSubsystemCollection<UWorldSubsystem>* WorldCollection = nullptr;
+	/** Cached pointer to a game subsystem collection, retrieved in a fancy way from @GameInstance. can be null */
 	FObjectSubsystemCollection<UGameInstanceSubsystem>* GameInstanceCollection = nullptr;
+	/** A list of player subsystems that should be created for a local player */
+	TArray<UClass*, TInlineAllocator<4>> PlayerSubsystems;
 	
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;
 };
 
 template <>
-FORCEINLINE UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem<UGameInstanceSubsystem>()
+FORCEINLINE UGameInstanceSubsystem* FAutomationWorld::GetOrCreateSubsystem<UGameInstanceSubsystem>()
 {
-	return CreateSubsystem(TSubclassOf<UGameInstanceSubsystem>{UGameInstanceSubsystem::StaticClass()});
+	return GetOrCreateSubsystem(TSubclassOf<UGameInstanceSubsystem>{UGameInstanceSubsystem::StaticClass()});
 }
 
 template <>
-FORCEINLINE UWorldSubsystem* FAutomationWorld::CreateSubsystem<UWorldSubsystem>()
+FORCEINLINE UWorldSubsystem* FAutomationWorld::GetOrCreateSubsystem<UWorldSubsystem>()
 {
-	return CreateSubsystem(TSubclassOf<UWorldSubsystem>{UWorldSubsystem::StaticClass()});
+	return GetOrCreateSubsystem(TSubclassOf<UWorldSubsystem>{UWorldSubsystem::StaticClass()});
 }
 
 

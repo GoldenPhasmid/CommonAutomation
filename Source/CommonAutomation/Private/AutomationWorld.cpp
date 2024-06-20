@@ -17,9 +17,20 @@ DEFINE_LOG_CATEGORY_STATIC(LogAutomationWorld, Log, Log);
 template <typename TSubsystemType>
 struct FScopeDisableSubsystemCreation
 {
-	FScopeDisableSubsystemCreation()
+	FScopeDisableSubsystemCreation(TConstArrayView<UClass*> InEnabledSubsystems)
+		: EnabledSubsystems(InEnabledSubsystems)
 	{
 		DisabledSubsystems = UCommonAutomationSettings::Get()->GetDisabledSubsystems<TSubsystemType>();
+		// filter enabled subsystems from default settings
+		for (auto ClassIt = DisabledSubsystems.CreateIterator(); ClassIt; ++ClassIt)
+		{
+			if (InEnabledSubsystems.Contains(*ClassIt))
+			{
+				ClassIt.RemoveCurrentSwap();
+			}
+		}
+
+		// apply CLASS_Abstract flag so that subsystems are skipped during subsystem collection initialization
 		for (UClass* SubsystemClass: DisabledSubsystems)
 		{
 			SubsystemClass->ClassFlags |= CLASS_Abstract;
@@ -28,6 +39,7 @@ struct FScopeDisableSubsystemCreation
 
 	~FScopeDisableSubsystemCreation()
 	{
+		// remove applied abstract flag
 		for (UClass* SubsystemClass: DisabledSubsystems)
 		{
 			SubsystemClass->ClassFlags &= ~CLASS_Abstract;
@@ -35,6 +47,7 @@ struct FScopeDisableSubsystemCreation
 	}
 
 private:
+	TConstArrayView<UClass*> EnabledSubsystems;
 	TArray<UClass*> DisabledSubsystems;
 };
 
@@ -56,6 +69,20 @@ UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
 FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
 FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
 FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitFlags::WithLocalPlayer};
+
+FAutomationWorldInitParams& FAutomationWorldInitParams::SetWorldPackage(const FString& InWorldPackage)
+{
+	WorldPackage = InWorldPackage;
+	return *this;
+}
+
+FAutomationWorldInitParams& FAutomationWorldInitParams::SetWorldPackage(FSoftObjectPath InWorldPath)
+{
+	UAssetRegistryHelpers::FixupRedirectedAssetPath(InWorldPath);
+	WorldPackage = InWorldPath.GetLongPackageName();
+	
+	return *this;
+}
 
 FWorldInitializationValues FAutomationWorldInitParams::CreateWorldInitValues() const
 {
@@ -99,7 +126,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	if (InitParams.CreateGameInstance() || InitParams.DefaultGameMode != nullptr)
 	{
 		check(InitParams.WorldType == EWorldType::Game);
-		CreateGameInstance();
+		CreateGameInstance(InitParams);
 	}
 
 	// initialize automation world with new game world
@@ -164,7 +191,8 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
 
 	{
-		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope;
+		;
+		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{InitParams.WorldSubsystems};
 		World->InitWorld(InitParams.CreateWorldInitValues());
 		WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
 	}
@@ -178,7 +206,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	World->UpdateLevelStreaming();
 }
 
-void FAutomationWorld::CreateGameInstance()
+void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& InitParams)
 {
 	if (SharedGameInstance == nullptr)
 	{
@@ -190,7 +218,7 @@ void FAutomationWorld::CreateGameInstance()
 		}
 
 		// create shared game instance
-		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope;
+		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope{InitParams.GameSubsystems};
 		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, TEXT("SharedGameInstance"), RF_Transient);
 #if REUSE_GAME_INSTANCE
 		// add to root so game instance lives between automation worlds
@@ -381,14 +409,12 @@ FAutomationWorldPtr FAutomationWorld::CreateGameWorld(EWorldInitFlags InitFlags)
 
 FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithGameInstance(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithGameInstance | InitFlags, DefaultGameMode};
-	return CreateWorld(InitParams);
+	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, EWorldInitFlags::WithGameInstance | InitFlags}.SetGameMode(DefaultGameMode));
 }
 
 FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGameModeBase> DefaultGameMode, EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game, EWorldInitFlags::WithLocalPlayer | InitFlags, DefaultGameMode};
-	return CreateWorld(InitParams);
+	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, EWorldInitFlags::WithLocalPlayer | InitFlags}.SetGameMode(DefaultGameMode));
 }
 
 FAutomationWorldPtr FAutomationWorld::CreateEditorWorld(EWorldInitFlags InitFlags)
@@ -399,20 +425,12 @@ FAutomationWorldPtr FAutomationWorld::CreateEditorWorld(EWorldInitFlags InitFlag
 
 FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game,InitFlags};
-	InitParams.WorldPackage = WorldPackage;
-
-	return CreateWorld(InitParams);
+	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, InitFlags}.SetWorldPackage(WorldPackage));
 }
 
-FAutomationWorldPtr FAutomationWorld::LoadGameWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags)
+FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FSoftObjectPath& WorldPath, EWorldInitFlags InitFlags)
 {
-	UAssetRegistryHelpers::FixupRedirectedAssetPath(WorldPath);
-	
-	FAutomationWorldInitParams InitParams{EWorldType::Game,InitFlags};
-	InitParams.WorldPackage = WorldPath.GetLongPackageName();
-	
-	return CreateWorld(InitParams);
+	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, InitFlags}.SetWorldPackage(WorldPath));
 }
 
 FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
@@ -423,14 +441,9 @@ FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(const FString& WorldPackag
 	return CreateWorld(InitParams);
 }
 
-FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(FSoftObjectPath WorldPath, EWorldInitFlags InitFlags)
+FAutomationWorldPtr FAutomationWorld::LoadEditorWorld(const FSoftObjectPath& WorldPath, EWorldInitFlags InitFlags)
 {
-	UAssetRegistryHelpers::FixupRedirectedAssetPath(WorldPath);
-	
-	FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
-	InitParams.WorldPackage = WorldPath.GetLongPackageName();
-
-	return CreateWorld(InitParams);
+	return CreateWorld(FAutomationWorldInitParams{EWorldType::Editor, InitFlags}.SetWorldPackage(WorldPath));
 }
 
 bool FAutomationWorld::Exists()
@@ -438,7 +451,7 @@ bool FAutomationWorld::Exists()
 	return bExists;
 }
 
-UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass)
+UGameInstanceSubsystem* FAutomationWorld::GetOrCreateSubsystem(TSubclassOf<UGameInstanceSubsystem> SubsystemClass)
 {
 	check(World && World->bIsWorldInitialized);
 	check(GameInstanceCollection);
@@ -466,7 +479,7 @@ UGameInstanceSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UGameInsta
 	return Subsystem;
 }
 
-UWorldSubsystem* FAutomationWorld::CreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass)
+UWorldSubsystem* FAutomationWorld::GetOrCreateSubsystem(TSubclassOf<UWorldSubsystem> SubsystemClass)
 {
 	check(World && World->bIsWorldInitialized);
 	check(WorldCollection);
@@ -574,7 +587,7 @@ ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 			const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
 			
 			FString Error;
-			FScopeDisableSubsystemCreation<ULocalPlayerSubsystem> Scope;
+			FScopeDisableSubsystemCreation<ULocalPlayerSubsystem> Scope{PlayerSubsystems};
 			ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, true);
 
 			checkf(Error.IsEmpty(), TEXT("%s"), *Error);

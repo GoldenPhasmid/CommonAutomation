@@ -86,7 +86,7 @@ bool FAutomationWorldTest_WorldSubsystem::RunTest(const FString& Parameters)
 	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
 
 	UTestWorldSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
-	Subsystem = WorldPtr->CreateSubsystem<UTestWorldSubsystem>();
+	Subsystem = WorldPtr->GetOrCreateSubsystem<UTestWorldSubsystem>();
 	UTestWorldSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
 	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
 	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
@@ -120,7 +120,7 @@ bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Paramete
 	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
 
 	UTestGameInstanceSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
-	Subsystem = WorldPtr->CreateSubsystem<UTestGameInstanceSubsystem>();
+	Subsystem = WorldPtr->GetOrCreateSubsystem<UTestGameInstanceSubsystem>();
 	UTestGameInstanceSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
 	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
 	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
@@ -133,7 +133,6 @@ bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Paramete
 
 	WorldPtr.Reset();
 	UTEST_TRUE("Subsystem is deinitialized", bDeinitialized);
-
 	
 	return !HasAnyErrors();
 }
