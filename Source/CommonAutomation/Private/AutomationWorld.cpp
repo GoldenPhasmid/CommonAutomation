@@ -63,18 +63,9 @@ FObjectSubsystemCollection<TSubsystemType>* GetSubsystemCollection(T* Owner)
 	return reinterpret_cast<TCollectionType*>(reinterpret_cast<uint8*>(Owner) + CollectionOffset);
 }
 
-bool FAutomationWorld::bExists = false;
-UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
-
-FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
-FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
-FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitFlags::WithLocalPlayer};
-
-FAutomationWorldInitParams& FAutomationWorldInitParams::SetWorldPackage(const FString& InWorldPackage)
-{
-	WorldPackage = InWorldPackage;
-	return *this;
-}
+const FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
+const FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
+const FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitFlags::WithLocalPlayer};
 
 FAutomationWorldInitParams& FAutomationWorldInitParams::SetWorldPackage(FSoftObjectPath InWorldPath)
 {
@@ -113,6 +104,15 @@ bool FAutomationWorldInitParams::ShouldInitScene() const
 												EWorldInitFlags::InitHitProxy | EWorldInitFlags::InitCollision | EWorldInitFlags::InitFX;
 	return !!(InitFlags & ShouldInitScene);
 }
+
+FAutomationWorldPtr FAutomationWorldInitParams::Create() const
+{
+	return FAutomationWorld::CreateWorld(*this);
+}
+
+bool FAutomationWorld::bExists = false;
+UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
+
 
 FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
 {
@@ -403,7 +403,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 
 FAutomationWorldPtr FAutomationWorld::CreateGameWorld(EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Game, InitFlags};
+	const FAutomationWorldInitParams InitParams{EWorldType::Game, InitFlags};
 	return CreateWorld(InitParams);
 }
 
@@ -419,7 +419,7 @@ FAutomationWorldPtr FAutomationWorld::CreateGameWorldWithPlayer(TSubclassOf<AGam
 
 FAutomationWorldPtr FAutomationWorld::CreateEditorWorld(EWorldInitFlags InitFlags)
 {
-	FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
+	const FAutomationWorldInitParams InitParams{EWorldType::Editor, InitFlags};
 	return CreateWorld(InitParams);
 }
 

@@ -14,6 +14,7 @@ class ULocalPlayer;
 class FAutomationWorld;
 class UWorldSubsystem;
 class UGameInstanceSubsystem;
+struct FAutomationWorldInitParams;
 
 enum class EWorldInitFlags: uint32
 {
@@ -48,16 +49,56 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 		: WorldType(InWorldType)
 		, InitFlags(InInitFlags)
 	{}
+	
+	FAutomationWorldInitParams(const FAutomationWorldInitParams& Other) = default;
+	FAutomationWorldInitParams(FAutomationWorldInitParams&& Other) = default;
+	
+	/**
+	 * Create automation world from initialization params
+	 * Handy method that can be called at the end of init chain:
+	 * 
+	 * Init(FAutomationWorldInitParams::WithGameMode)
+	 * .SetGameMode<AGameMode>()
+	 * .EnableSubsystem<UWorldSubsystem>()
+	 * .EnableSubsystem<UGameInstanceSubsystem>()
+	 * .Create();
+	 */
+	FAutomationWorldPtr Create() const;
 
-	FAutomationWorldInitParams& SetGameMode(TSubclassOf<AGameModeBase> InGameMode)
+	/** add initialization flags */
+	FORCEINLINE FAutomationWorldInitParams& AddFlags(EWorldInitFlags InFlags)
+	{
+		InitFlags |= InFlags;
+		return *this;
+	}
+
+	/** remove initialization flags */
+	FORCEINLINE FAutomationWorldInitParams& RemoveFlags(EWorldInitFlags InFlags)
+	{
+		InitFlags &= ~InFlags;
+		return *this;
+	}
+
+	FORCEINLINE FAutomationWorldInitParams& SetGameMode(TSubclassOf<AGameModeBase> InGameMode)
 	{
 		DefaultGameMode = InGameMode;
 		return *this;
 	}
-
+	
 	/** set world package to load */
-	FAutomationWorldInitParams& SetWorldPackage(const FString& InWorldPackage);
 	FAutomationWorldInitParams& SetWorldPackage(FSoftObjectPath InWorldPath);
+	FORCEINLINE FAutomationWorldInitParams& SetWorldPackage(const FString& InWorldPackage)
+	{
+		WorldPackage = InWorldPackage;
+		return *this;
+	}
+	
+	template <typename T, TEMPLATE_REQUIRES(TIsDerivedFrom<T, AGameModeBase>::Value)>
+	FAutomationWorldInitParams& SetGameMode()
+	{
+		DefaultGameMode = T::StaticClass();
+		return *this;
+	}
 
 	template <typename T, TEMPLATE_REQUIRES(TIsDerivedFrom<T, UGameInstanceSubsystem>::Value)>
 	FAutomationWorldInitParams& EnableSubsystem()
@@ -79,34 +120,48 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 		PlayerSubsystems.Add(T::StaticClass());
 		return *this;
 	}
-
-	template <typename TCallbackType>
-	FAutomationWorldInitParams& SetInitWorld(TCallbackType&& Callback)
+	
+	FORCEINLINE FAutomationWorldInitParams& SetInitWorld(TDelegate<void(UWorld*)>&& Callback)
 	{
 		InitWorld = Callback;
 		return *this;
 	}
-	
-	template <typename TCallbackType>
-	FAutomationWorldInitParams& SetInitWorldSettings(TCallbackType& Callback)
+
+	FORCEINLINE FAutomationWorldInitParams& SetInitWorldSettings(TDelegate<void(AWorldSettings*)>&& Callback)
 	{
 		InitWorldSettings = Callback;
 		return *this;
 	}
+
+	template <typename T>
+	FAutomationWorldInitParams& SetInitWorld(T&& Callback)
+	{
+		InitWorld.BindLambda(Forward<T>(Callback));
+		return *this;
+	}
 	
+	template <typename T>
+	FAutomationWorldInitParams& SetInitWorldSettings(T&& Callback)
+	{
+		InitWorldSettings.BindLambda(Forward<T>(Callback));
+		return *this;
+	}
 	
 	/** @return world initialization values produced from this params */
 	FWorldInitializationValues CreateWorldInitValues() const;
 
-	bool HasWorldPackage() const { return !WorldPackage.IsEmpty(); }
+	FORCEINLINE bool HasWorldPackage() const { return !WorldPackage.IsEmpty(); }
 	
-	bool ShouldInitScene() const;
-	bool CreateGameInstance() const { return !!(InitFlags & EWorldInitFlags::CreateGameInstance); }
-	bool CreatePrimaryPlayer() const { return !!(InitFlags & EWorldInitFlags::CreateLocalPlayer); }
-	bool RouteStartPlay() const { return !!(InitFlags & EWorldInitFlags::StartPlay); }
+	FORCEINLINE bool ShouldInitScene() const;
+	FORCEINLINE bool CreateGameInstance() const { return !!(InitFlags & EWorldInitFlags::CreateGameInstance); }
+	FORCEINLINE bool CreatePrimaryPlayer() const { return !!(InitFlags & EWorldInitFlags::CreateLocalPlayer); }
+	FORCEINLINE bool RouteStartPlay() const { return !!(InitFlags & EWorldInitFlags::StartPlay); }
 	
 	/** World type */
 	EWorldType::Type WorldType = EWorldType::Game;
+
+	/** World initialization flags */
+	EWorldInitFlags InitFlags = EWorldInitFlags::None;
 
 	/** World package to load */
 	FString WorldPackage{};
@@ -114,16 +169,13 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	/** world load flags, used if WorldPackage is set. Quiet by default */
 	ELoadFlags LoadFlags = ELoadFlags::LOAD_Quiet;
 	
-	/** World initialization flags */
-	EWorldInitFlags InitFlags = EWorldInitFlags::None;
-	
 	/** Default game mode */
 	TSubclassOf<AGameModeBase> DefaultGameMode = nullptr;
 
 	/** world initialization delegate */
 	TDelegate<void(UWorld*)> InitWorld;
 
-	/** */
+	/** world settings initialization delegate */
 	TDelegate<void(AWorldSettings*)> InitWorldSettings;
 
 	/** A list of game instance subsystems that would be created as part of automation world */
@@ -132,11 +184,18 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	TArray<UClass*, TInlineAllocator<4>> WorldSubsystems;
 	/** A list of local player subsystems that would be created as part of automation world */
 	TArray<UClass*, TInlineAllocator<4>> PlayerSubsystems;
-	
-	static FAutomationWorldInitParams Minimal;
-	static FAutomationWorldInitParams WithGameInstance;
-	static FAutomationWorldInitParams WithLocalPlayer;
+
+	static const FAutomationWorldInitParams Minimal;
+	static const FAutomationWorldInitParams WithGameInstance;
+	static const FAutomationWorldInitParams WithLocalPlayer;
 };
+
+FORCEINLINE FAutomationWorldInitParams Init(const FAutomationWorldInitParams& InitParams)
+{
+	return InitParams;
+}
+
+using FWorldInitParams = FAutomationWorldInitParams;
 
 /**
  * RAII wrapper to create, initialize and destroy a world. Can be used to test various levels in Game mode and Editor mode.
