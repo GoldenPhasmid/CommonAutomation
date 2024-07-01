@@ -119,7 +119,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	bExists = true;
 	InitialFrameCounter = GFrameCounter;
 
-	FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddRaw(this, &FAutomationWorld::HandleLevelStreamingStateChange);
+	StreamingStateHandle = FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddRaw(this, &FAutomationWorld::HandleLevelStreamingStateChange);
 
 	// create game instance if it was requested by user. Game instance is required for game mode
 	// @note: use fallback game instance to create game mode? Don't create game instance if not explicitly specified?
@@ -151,6 +151,13 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 	{
 		GetOrCreatePrimaryPlayer();
 	}
+
+	TestCompletedHandle = FAutomationTestFramework::Get().OnTestEndEvent.AddRaw(this, &FAutomationWorld::HandleTestCompleted);
+}
+
+void FAutomationWorld::HandleTestCompleted(FAutomationTestBase* Test)
+{
+	UE_LOG(LogAutomationWorld, Fatal, TEXT("Automation world wasn't destroyed at the end of the test %s"), *Test->GetBeautifiedTestName());
 }
 
 void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
@@ -282,7 +289,9 @@ FAutomationWorld::~FAutomationWorld()
 	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld::DestroyWorld);
 	
 	check(IsValid(World));
-	FLevelStreamingDelegates::OnLevelStreamingStateChanged.RemoveAll(this);
+	FLevelStreamingDelegates::OnLevelStreamingStateChanged.Remove(StreamingStateHandle);
+	// remove test completion handle
+	FAutomationTestFramework::Get().OnTestEndEvent.Remove(TestCompletedHandle);
 	
 	if (World->GetBegunPlay())
 	{

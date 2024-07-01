@@ -310,10 +310,11 @@ public:
 	~FAutomationWorld();
 
 private:
-	
-	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
 	FAutomationWorld(UWorld* NewWorld, const FAutomationWorldInitParams& InitParams);
+
+	void HandleTestCompleted(FAutomationTestBase* Test);
+	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
 	void InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams);
 	USubsystem* AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer);
@@ -333,6 +334,10 @@ private:
 	UWorld* PrevGWorld = nullptr;
 	/** GFrameCounter value before this automation world was created */
 	uint64 InitialFrameCounter = 0;
+	/** Handle to TestEndEvent delegate */
+	FDelegateHandle TestCompletedHandle;
+	/** Handle to LevelStreamingStateChanged delegate */
+	FDelegateHandle StreamingStateHandle;
 
 	/** Cached pointer to a world subsystem collection, retrieved in a fancy way from @World */
 	FObjectSubsystemCollection<UWorldSubsystem>* WorldCollection = nullptr;
