@@ -15,6 +15,76 @@
 
 constexpr auto AutomationTestFlags = EAutomationTestFlags::EngineFilter | EAutomationTestFlags::EditorContext | EAutomationTestFlags::CriticalPriority;
 
+namespace UE::Private
+{
+	static bool bTestSubsystemEnabled = false;
+}
+
+bool UTestWorldSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+	return UE::Private::bTestSubsystemEnabled;
+}
+
+bool UTestGameInstanceSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+	return UE::Private::bTestSubsystemEnabled;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_CreateWorldUniqueTest, "CommonAutomation.AutomationWorld.CreateWorld returns unique world", AutomationTestFlags)
+
+bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
+{
+	FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateGameWorld(EWorldInitFlags::WithGameInstance);
+	UTEST_TRUE("Automation world is valid", ScopedWorld.IsValid());
+
+	const FObjectKey WorldKey{ScopedWorld->GetWorld()};
+	const FObjectKey GameInstanceKey{ScopedWorld->GetGameInstance()};
+	const FObjectKey PackageKey{ScopedWorld->GetWorld()->GetPackage()};
+
+	UTEST_TRUE("World is valid",		 WorldKey != FObjectKey{});
+	UTEST_TRUE("World package is valid", PackageKey != FObjectKey{});
+	UTEST_TRUE("Game instance is valid", GameInstanceKey != FObjectKey{});
+
+	ScopedWorld.Reset();
+	ScopedWorld = FAutomationWorld::CreateGameWorld(EWorldInitFlags::WithGameInstance);
+
+	UTEST_TRUE("World is unique",			WorldKey		!= FObjectKey{ScopedWorld->GetWorld()});
+	UTEST_TRUE("World package is unique",	PackageKey		!= FObjectKey{ScopedWorld->GetWorld()->GetPackage()});
+#if !REUSE_GAME_INSTANCE
+	UTEST_TRUE("Game instance is unique",	GameInstanceKey	!= FObjectKey{ScopedWorld->GetGameInstance()});
+#endif
+	
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_LoadWorldUniqueTest, "CommonAutomation.AutomationWorld.LoadWorld returns unique world", AutomationTestFlags)
+
+bool FAutomationWorld_LoadWorldUniqueTest::RunTest(const FString& Parameters)
+{
+	const FString TestMapPackageName{TEXT("/Engine/Maps/Entry")};
+	FAutomationWorldPtr ScopedWorld = FAutomationWorld::LoadGameWorld(TestMapPackageName, EWorldInitFlags::WithGameInstance);
+	UTEST_TRUE("Automation world is valid", ScopedWorld.IsValid());
+	
+	const FObjectKey WorldKey{ScopedWorld->GetWorld()};
+	const FObjectKey GameInstanceKey{ScopedWorld->GetGameInstance()};
+	const FObjectKey PackageKey{ScopedWorld->GetWorld()->GetPackage()};
+
+	UTEST_TRUE("World is valid",		 WorldKey != FObjectKey{});
+	UTEST_TRUE("World package is valid", PackageKey != FObjectKey{});
+	UTEST_TRUE("Game instance is valid", GameInstanceKey != FObjectKey{});
+
+	ScopedWorld.Reset();
+	ScopedWorld = FAutomationWorld::LoadGameWorld(TestMapPackageName, EWorldInitFlags::WithGameInstance);
+
+	UTEST_TRUE("World is unique",			WorldKey		!= FObjectKey{ScopedWorld->GetWorld()});
+	UTEST_TRUE("Game instance is unique",	GameInstanceKey	!= FObjectKey{ScopedWorld->GetGameInstance()});
+#if !REUSE_GAME_INSTANCE
+	UTEST_TRUE("World package is unique",	PackageKey		!= FObjectKey{ScopedWorld->GetWorld()->GetPackage()});
+#endif
+	
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldBehaviorTests, "CommonAutomation.AutomationWorld.Behavior", AutomationTestFlags)
 
 bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
@@ -80,14 +150,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldTest_WorldSubsystem, "CommonAut
 
 bool FAutomationWorldTest_WorldSubsystem::RunTest(const FString& Parameters)
 {
-	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorld(~EWorldInitFlags::StartPlay);
+	const FWorldInitParams Params{EWorldType::Game, EWorldInitFlags::InitScene};
+	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateWorld(Params);
 	
 	UTestWorldSubsystem* Subsystem = WorldPtr->GetWorld()->GetSubsystem<UTestWorldSubsystem>();
 	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
 
-	UTestWorldSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
+	// enable test subsystems
+	UE::Private::bTestSubsystemEnabled = true;
 	Subsystem = WorldPtr->GetOrCreateSubsystem<UTestWorldSubsystem>();
-	UTestWorldSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
 	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
 	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
 	UTEST_TRUE("Subsystem is post initialized", Subsystem->bPostInitialized);
@@ -108,6 +179,13 @@ bool FAutomationWorldTest_WorldSubsystem::RunTest(const FString& Parameters)
 	WorldPtr.Reset();
 	UTEST_TRUE("Subsystem is deinitialized", bDeinitialized);
 
+	WorldPtr = Init(Params).EnableSubsystem<UTestWorldSubsystem>().Create();
+	Subsystem = WorldPtr->GetSubsystem<UTestWorldSubsystem>();
+	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
+	
+	// disable test subsystems
+	UE::Private::bTestSubsystemEnabled = false;
+	
 	return !HasAnyErrors();
 }
 
@@ -115,13 +193,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldTest_GameInstanceSubsystem, "Co
 
 bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Parameters)
 {
-	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance(nullptr, ~EWorldInitFlags::StartPlay);
+	FWorldInitParams Params{EWorldType::Game, EWorldInitFlags::InitScene | EWorldInitFlags::CreateGameInstance};
+	FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateWorld(Params);
+	
 	UTestGameInstanceSubsystem* Subsystem = WorldPtr->GetGameInstance()->GetSubsystem<UTestGameInstanceSubsystem>();
 	UTEST_FALSE("Test subsystem is not created", IsValid(Subsystem));
 
-	UTestGameInstanceSubsystem::StaticClass()->ClassFlags &= ~CLASS_Abstract;
+	// enable test subsystems
+	UE::Private::bTestSubsystemEnabled = true;
 	Subsystem = WorldPtr->GetOrCreateSubsystem<UTestGameInstanceSubsystem>();
-	UTestGameInstanceSubsystem::StaticClass()->ClassFlags |= CLASS_Abstract;
 	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
 	UTEST_TRUE("Subsystem is initialized", Subsystem->bInitialized);
 	
@@ -133,6 +213,13 @@ bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Paramete
 
 	WorldPtr.Reset();
 	UTEST_TRUE("Subsystem is deinitialized", bDeinitialized);
+
+	WorldPtr = Init(Params).EnableSubsystem<UTestGameInstanceSubsystem>().Create();
+	Subsystem = WorldPtr->GetSubsystem<UTestGameInstanceSubsystem>();
+	UTEST_TRUE("Test subsystem is created", IsValid(Subsystem));
+
+	// disable test subsystems
+	UE::Private::bTestSubsystemEnabled = false;
 	
 	return !HasAnyErrors();
 }
@@ -200,5 +287,3 @@ bool FAutomationWorldFlagsTests::RunTest(const FString& Parameters)
 
 	return !HasAnyErrors();
 }
-
-

@@ -1,18 +1,19 @@
 ﻿#include "AutomationWorld.h"
 
+#include "AutomationCommon.h"
 #include "AutomationGameInstance.h"
 #include "CommonAutomationSettings.h"
 #include "DummyViewport.h"
 #include "EngineUtils.h"
 #include "GameInstanceAutomationSupport.h"
 #include "GameMapsSettings.h"
+#include "PackageTools.h"
+#include "AI/NavigationSystemBase.h"
 #include "AssetRegistry/AssetRegistryHelpers.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameModeBase.h"
 #include "Streaming/LevelStreamingDelegates.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogAutomationWorld, Log, Log);
 
 template <typename TSubsystemType>
 struct FScopeDisableSubsystemCreation
@@ -157,7 +158,7 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 
 void FAutomationWorld::HandleTestCompleted(FAutomationTestBase* Test)
 {
-	UE_LOG(LogAutomationWorld, Fatal, TEXT("Automation world wasn't destroyed at the end of the test %s"), *Test->GetBeautifiedTestName());
+	UE_LOG(LogCommonAutomation, Fatal, TEXT("Automation world wasn't destroyed at the end of the test %s"), *Test->GetBeautifiedTestName());
 }
 
 void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
@@ -176,6 +177,8 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	WorldContext->OwningGameInstance = GameInstance;
 	if (GameInstance != nullptr)
 	{
+		// disable game instance subsystems not required for this automation world
+		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope{InitParams.GameSubsystems};
 		// notify game instance that it is initialized for automation (primarily to set world context)
 		CastChecked<IGameInstanceAutomationSupport>(GameInstance)->InitForAutomation(WorldContext);
 	}
@@ -196,9 +199,10 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	World->WorldType = InitParams.WorldType;
 	// tick viewports only in editor worlds
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
+	// cache init flags for later use
+	InitFlags = InitParams.InitFlags;
 
 	{
-		;
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{InitParams.WorldSubsystems};
 		World->InitWorld(InitParams.CreateWorldInitValues());
 		WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
@@ -208,9 +212,18 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	{
 		World->SetGameMode({});
 	}
+	
 	World->PersistentLevel->UpdateModelComponents();
+	// Register components in the persistent level (current)
 	World->UpdateWorldComponents(true, false);
-	World->UpdateLevelStreaming();
+	// Make sure secondary levels are loaded & visible.
+	World->FlushLevelStreaming();
+
+	if (IsEditorWorld() && !!(InitFlags & EWorldInitFlags::InitNavigation))
+	{
+		// initialize navigation system for editor worlds
+		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::EditorMode);
+	}
 }
 
 void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& InitParams)
@@ -224,9 +237,15 @@ void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& Init
 			GameInstanceClass = UAutomationGameInstance::StaticClass();
 		}
 
-		// create shared game instance
-		FScopeDisableSubsystemCreation<UGameInstanceSubsystem> Scope{InitParams.GameSubsystems};
-		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, TEXT("SharedGameInstance"), RF_Transient);
+#if REUSE_GAME_INSTANCE
+		const FString GameInstanceName{TEXT("AutomationWorld_SharedGameInstance")};
+#else
+		static uint32 GameInstanceCounter = 0;
+		const FString GameInstanceName = FString::Printf(TEXT("AutomationWorld_GameInstance_%d"), GameInstanceCounter++);
+#endif
+		
+		// create game instance, either in shared or unique mode
+		SharedGameInstance = NewObject<UGameInstance>(GEngine, GameInstanceClass, FName{GameInstanceName}, RF_Transient);
 #if REUSE_GAME_INSTANCE
 		// add to root so game instance lives between automation worlds
 		SharedGameInstance->AddToRoot();
@@ -260,6 +279,24 @@ void FAutomationWorld::CreateViewportClient()
 const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
 {
 	return WorldCollection->GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
+}
+
+UPackage* FAutomationWorld::CreateUniqueWorldPackage(const FString& PackageName)
+{
+	static uint32 PackageNameCounter = 0;
+	// create a unique temporary package for world loaded from existing package on disk. Add /Temp/ prefix to avoid "package always doesn't exist" warning
+	const FName UniquePackageName = *FString::Printf(TEXT("/Temp/%s_%d"), *PackageName, PackageNameCounter++);
+		
+	UPackage* WorldPackage = NewObject<UPackage>(nullptr, UniquePackageName, RF_Transient);
+	// mark as map package
+	WorldPackage->ThisContainsMap();
+	// add PlayInEditor flag to disable dirtying world package
+	WorldPackage->SetPackageFlags(PKG_PlayInEditor);
+	// mark package as transient to avoid it being processed as an asset
+	WorldPackage->SetFlags(RF_Transient);
+
+	return WorldPackage;
+
 }
 
 void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded,  ELevelStreamingState PrevState, ELevelStreamingState NewState)
@@ -304,6 +341,8 @@ FAutomationWorld::~FAutomationWorld()
 		GameInstance->Shutdown();
 	}
 
+	UPackage* WorldPackage = World->GetPackage();
+	
 	// destroy world and world context
 	GEngine->ShutdownWorldNetDriver(World);
 	World->DestroyWorld(false);
@@ -336,7 +375,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 {
 	if (Exists())
 	{
-		UE_LOG(LogAutomationWorld, Fatal, TEXT("%s: Tring to create second automation world"), *FString(__FUNCTION__));
+		UE_LOG(LogCommonAutomation, Fatal, TEXT("%s: Tring to create second automation world"), *FString(__FUNCTION__));
 		return nullptr;
 	}
 
@@ -346,28 +385,44 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	// load game world flow
 	if (InitParams.HasWorldPackage())
 	{
-		if (!FPackageName::IsValidLongPackageName(InitParams.WorldPackage))
+		const FString WorldPackageToLoad = InitParams.GetWorldPackage();
+		if (WorldPackageToLoad.IsEmpty())
 		{
-			// world package name is ill formed
-			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Specified package name %s is not a valid long package name"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+			// world package name is set by empty
+			UE_LOG(LogCommonAutomation, Error, TEXT("%s: Specified package name %s is empty"), *FString(__FUNCTION__), *WorldPackageToLoad);
 			return nullptr;
 		}
 		
-		if (!FPackageName::DoesPackageExist(InitParams.WorldPackage))
+		if (!FPackageName::IsValidLongPackageName(WorldPackageToLoad))
 		{
-			// world package doesn't exist on disk
-			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Specified package name %s doesn't exist on disk"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+			// world package name is ill formed
+			UE_LOG(LogCommonAutomation, Error, TEXT("%s: Specified package name %s is not a valid long package name"), *FString(__FUNCTION__), *WorldPackageToLoad);
 			return nullptr;
 		}
 
-		const FName WorldPackageName{InitParams.WorldPackage};
+		FPackagePath PackagePath = FPackagePath::FromPackageNameChecked(WorldPackageToLoad);
+		if (!FPackageName::DoesPackageExist(PackagePath, &PackagePath))
+		{
+			// world package doesn't exist on disk
+			UE_LOG(LogCommonAutomation, Error, TEXT("%s: Specified package name %s doesn't exist on disk"), *FString(__FUNCTION__), *WorldPackageToLoad);
+			return nullptr;
+		}
+		
+		UPackage* WorldPackage = CreateUniqueWorldPackage(FString::Printf(TEXT("%s_%s"), TEXT("AutomationWorld"), *WorldPackageToLoad));
+
+		const FName WorldPackageName{WorldPackageToLoad};
 		UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageName) = InitParams.WorldType;
-		UPackage* WorldPackage = LoadPackage(nullptr, *InitParams.WorldPackage, InitParams.LoadFlags);
+
+		// load world package as a temporary package with a different name
+		WorldPackage  = LoadPackage(WorldPackage, PackagePath, InitParams.LoadFlags);
+		
 		UWorld::WorldTypePreLoadMap.Remove(WorldPackageName);
 
 		if (WorldPackage == nullptr)
 		{
-			UE_LOG(LogAutomationWorld, Error, TEXT("%s: Failed to load package %s"), *FString(__FUNCTION__), *InitParams.WorldPackage);
+			// failed to load world package for some reason
+			UE_LOG(LogCommonAutomation, Error, TEXT("%s: Failed to load package %s"), *FString(__FUNCTION__), *WorldPackageToLoad);
+			return nullptr;
 		}
 		
 		NewWorld = UWorld::FindWorldInPackage(WorldPackage);
@@ -378,30 +433,19 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 		check(NewWorld);
 	}
 	
-	bool bWithGameInstance = !!(InitParams.InitFlags & EWorldInitFlags::CreateGameInstance);
 	if (NewWorld == nullptr)
 	{
-		UPackage* WorldPackage = nullptr;
-		if (bWithGameInstance)
-		{
-			static uint32 PackageNameCounter = 0;
-			// create unique package name for an empty world. Add /Temp/ prefix to avoid "package always doesn't exist" warning
-			const FName PackageName = *FString::Printf(TEXT("/Temp/%s%d"), TEXT("AutomationWorld"), PackageNameCounter++);
-			/** */
-			WorldPackage = NewObject<UPackage>(nullptr, PackageName, RF_Transient);
-			// mark as map package
-			WorldPackage->ThisContainsMap();
-			// add PlayInEditor flag to disable dirtying world package
-			WorldPackage->SetPackageFlags(PKG_PlayInEditor);
-		}
+		// create unique package for an empty world
+		UPackage* WorldPackage = CreateUniqueWorldPackage(TEXT("AutomationWorld"));
 
+		// create an empty world
 		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
 		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, NAME_None, WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
 	}
 
 	if (NewWorld == nullptr)
 	{
-		UE_LOG(LogAutomationWorld, Error, TEXT("%s: Failed to create world for automation."), *FString(__FUNCTION__));
+		UE_LOG(LogCommonAutomation, Error, TEXT("%s: Failed to create world for automation."), *FString(__FUNCTION__));
 		return nullptr;
 	}
 
@@ -434,11 +478,21 @@ FAutomationWorldPtr FAutomationWorld::CreateEditorWorld(EWorldInitFlags InitFlag
 
 FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FString& WorldPackage, EWorldInitFlags InitFlags)
 {
+	if (WorldPackage.IsEmpty())
+	{
+		return nullptr;
+	}
+	
 	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, InitFlags}.SetWorldPackage(WorldPackage));
 }
 
 FAutomationWorldPtr FAutomationWorld::LoadGameWorld(const FSoftObjectPath& WorldPath, EWorldInitFlags InitFlags)
 {
+	if (WorldPath.IsNull())
+	{
+		return nullptr;
+	}
+	
 	return CreateWorld(FAutomationWorldInitParams{EWorldType::Game, InitFlags}.SetWorldPackage(WorldPath));
 }
 
@@ -625,7 +679,7 @@ void FAutomationWorld::DestroyLocalPlayer(ULocalPlayer* LocalPlayer)
 void FAutomationWorld::RouteStartPlay() const
 {
 	check(World && World->bIsWorldInitialized);
-	if (UNLIKELY(World->WorldType == EWorldType::Editor))
+	if (UNLIKELY(IsEditorWorld()))
 	{
 		return;
 	}
@@ -637,6 +691,12 @@ void FAutomationWorld::RouteStartPlay() const
 	
 	FURL URL{};
 	World->InitializeActorsForPlay(URL);
+	
+	if (!!(InitFlags & EWorldInitFlags::InitNavigation))
+	{
+		// initialize navigation system for game worlds if requested
+		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::GameMode);
+	}
 
 	// call OnWorldBeginPlay for world subsystems and StartPlay for GameMode
 	World->BeginPlay();
@@ -679,9 +739,19 @@ void FAutomationWorld::TickWorld(int32 NumFrames)
 	while (NumFrames > 0)
 	{
 		World->Tick(TickType, DeltaTime);
+
+		if (IsEditorWorld())
+		{
+			// Tick any editor FTickableEditorObject derived classes
+			FTickableEditorObject::TickObjects(DeltaTime);
+		}
+		else
+		{
+			// tick streamable manager and other game tickable objects without world
+			// world-related tickable objects are processed during world tick
+			FTickableGameObject::TickObjects(nullptr, LEVELTICK_All, false, DeltaTime);
+		}
 		
-		// tick streamable manager
-		FTickableGameObject::TickObjects(nullptr, LEVELTICK_All, false, DeltaTime);
 		// update level streaming, as we're not drawing viewport which usually updates it
 		World->UpdateLevelStreaming();
 

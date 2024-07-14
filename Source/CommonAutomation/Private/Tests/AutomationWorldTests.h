@@ -6,12 +6,13 @@
 
 #include "AutomationWorldTests.generated.h"
 
-UCLASS(HideDropdown, Abstract)
+UCLASS(HideDropdown)
 class UTestWorldSubsystem: public UWorldSubsystem
 {
 	GENERATED_BODY()
 public:
 
+	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override
 	{
 		Super::Initialize(Collection);
@@ -45,12 +46,13 @@ public:
 	uint8 bStreamingStateUpdated: 1 = false;
 };
 
-UCLASS(HideDropdown, Abstract)
+UCLASS(HideDropdown)
 class UTestGameInstanceSubsystem: public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 public:
 
+	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override
 	{
 		Super::Initialize(Collection);

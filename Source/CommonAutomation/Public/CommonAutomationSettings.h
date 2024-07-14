@@ -9,6 +9,9 @@ class UWorldSubsystem;
 class ULocalPlayerSubsystem;
 class UGameInstanceSubsystem;
 
+namespace UE::Automation
+{
+	
 struct FSubsystemContainer
 {
 	FSubsystemContainer() = default;
@@ -34,10 +37,10 @@ struct FSubsystemContainer
 		{
 			return DisabledSubsystems;
 		}
-		
+	
 		bDirty = false;
 		DisabledSubsystems = AllSubsystems;
-		
+	
 		if (EnabledSubsystems.IsEmpty())
 		{
 			return DisabledSubsystems;
@@ -63,6 +66,9 @@ private:
 	mutable TArray<UClass*> DisabledSubsystems;
 	mutable bool bDirty = true;
 };
+	
+}
+
 
 UCLASS(Config = Editor, DefaultConfig)
 class COMMONAUTOMATION_API UCommonAutomationSettings: public UDeveloperSettings
@@ -82,8 +88,13 @@ public:
 
 	template <typename TSubsystemType>
 	const TArray<UClass*>& GetDisabledSubsystems() const;
+
+	FORCEINLINE const TArray<FDirectoryPath>& GetAssetPaths() const { return AutomationAssetPaths; }
 	
 protected:
+
+	UPROPERTY(EditAnywhere, Config, meta = (DisplayName = "Asset Paths For Automation", LongPackageName))
+	TArray<FDirectoryPath> AutomationAssetPaths;
 	
 	UPROPERTY(EditAnywhere, Config)
 	bool bDisableProjectSubsystems = true;
@@ -110,13 +121,13 @@ protected:
 	TArray<TSubclassOf<ULocalPlayerSubsystem>> LocalPlayerSubsystems;
 	
 	template <typename TSubsystemType>
-	void InitializeToDefault(FSubsystemContainer& Container, TArray<TSubclassOf<TSubsystemType>>& EnabledArray, const FString& ConfigKey) const
+	void InitializeToDefault(UE::Automation::FSubsystemContainer& Container, TArray<TSubclassOf<TSubsystemType>>& EnabledArray, const FString& ConfigKey) const
 	{
 		static const TCHAR* ConfigSection{TEXT("/Script/CommonAutomation.CommonAutomationSettings")};
 
 		if (!Container.Initialized())
 		{
-			Container = FSubsystemContainer{TSubsystemType::StaticClass()};
+			Container = UE::Automation::FSubsystemContainer{TSubsystemType::StaticClass()};
 		}
 
 		FString ConfigArray{};
@@ -142,7 +153,7 @@ protected:
 	template <typename TSubsystemType>
 	FString GetConfigKey() const = delete;
 	
-	FSubsystemContainer WorldSubsystemContainer;
-	FSubsystemContainer GameInstanceSubsystemContainer;
-	FSubsystemContainer LocalPlayerSubsystemContainer;
+	UE::Automation::FSubsystemContainer WorldSubsystemContainer;
+	UE::Automation::FSubsystemContainer GameInstanceSubsystemContainer;
+	UE::Automation::FSubsystemContainer LocalPlayerSubsystemContainer;
 };

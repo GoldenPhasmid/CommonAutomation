@@ -7,7 +7,6 @@ public class CommonAutomation : ModuleRules
 	public CommonAutomation(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		OptimizeCode = CodeOptimization.Never; // @todo: remove
 		
 		PrivateDefinitions.AddRange(
 			new string []
@@ -36,6 +35,8 @@ public class CommonAutomation : ModuleRules
 				"CommonAutomationRuntime",
 				"AssetRegistry", 
 				"GameProjectGeneration",
+				"UnrealEd",
+				"StructUtils",
 			}
 		);
 	}

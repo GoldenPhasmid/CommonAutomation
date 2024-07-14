@@ -94,7 +94,7 @@ bool UCommonAutomationSettings::IsProjectModuleClass(UClass* Class)
 	return false;
 }
 
-FSubsystemContainer::FSubsystemContainer(UClass* InBaseType)
+UE::Automation::FSubsystemContainer::FSubsystemContainer(UClass* InBaseType)
 	: BaseType(InBaseType)
 {
 	// initialize all subsystems
