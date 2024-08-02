@@ -2,6 +2,7 @@
 
 #include "GameProjectUtils.h"
 #include "ModuleDescriptor.h"
+#include "GameFramework/GameModeBase.h"
 
 template <>
 FString UCommonAutomationSettings::GetConfigKey<UWorldSubsystem>() const
@@ -39,10 +40,19 @@ const TArray<UClass*>& UCommonAutomationSettings::GetDisabledSubsystems<ULocalPl
 	return LocalPlayerSubsystemContainer.GetDisabledSubsystems(LocalPlayerSubsystems);
 }
 
+UCommonAutomationSettings::UCommonAutomationSettings(const FObjectInitializer& Initializer): Super(Initializer)
+{
+	DefaultGameMode = AGameModeBase::StaticClass();
+}
 
 const UCommonAutomationSettings* UCommonAutomationSettings::Get()
 {
 	return GetDefault<UCommonAutomationSettings>();
+}
+
+UCommonAutomationSettings* UCommonAutomationSettings::GetMutable()
+{
+	return GetMutableDefault<UCommonAutomationSettings>();
 }
 
 void UCommonAutomationSettings::PostInitProperties()

@@ -224,6 +224,31 @@ bool FAutomationWorldTest_GameInstanceSubsystem::RunTest(const FString& Paramete
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_NavigationSystemTest, "CommonAutomation.AutomationWorld.NavigationSystem", AutomationTestFlags)
+
+bool FAutomationWorld_NavigationSystemTest::RunTest(const FString& Parameters)
+{
+	{
+		FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateEditorWorld(EWorldInitFlags::InitScene | EWorldInitFlags::InitNavigation);
+
+		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(*ScopedWorld);
+		UTEST_TRUE("UCominoNavigationSystem is created for editor world", IsValid(NavSys));
+		UTEST_TRUE("Navigation system is initialized for world", NavSys->IsInitialized() && NavSys->IsWorldInitDone());
+	}
+
+	{
+		FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateGameWorld(EWorldInitFlags::InitScene | EWorldInitFlags::InitNavigation);
+
+		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(*ScopedWorld);
+		UTEST_TRUE("Navigation system is not initialized before BeginPlay", !NavSys->IsInitialized() && !NavSys->IsWorldInitDone());
+		ScopedWorld->RouteStartPlay();
+		UTEST_TRUE("Navigation system is initialized for world", NavSys->IsInitialized() && NavSys->IsWorldInitDone());
+	}
+
+	return !HasAnyErrors();
+}
+
+
 BEGIN_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests, "CommonAutomation.AutomationWorld.Flags", AutomationTestFlags)
 	void TestFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred);
 END_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests)

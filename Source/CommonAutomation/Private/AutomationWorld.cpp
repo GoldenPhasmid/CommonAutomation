@@ -185,6 +185,8 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	
 	// Step 3: initialize world settings
 	AWorldSettings* WorldSettings = World->GetWorldSettings();
+	// if world package is specified it means world was loaded from existing asset and not created from scratch
+	// such worlds can have game mode pre-defined to a specific one, so we don't want to override it
 	if (!InitParams.HasWorldPackage() && InitParams.DefaultGameMode)
 	{
 		// override default game mode if the world is created and not loaded
@@ -210,6 +212,12 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	
 	if (GameInstance != nullptr)
 	{
+		const UCommonAutomationSettings* Settings = UCommonAutomationSettings::Get();
+		// fixup world settings game mode if we don't want to use heavy project default game mode, for both created and loaded worlds
+		if (WorldSettings->DefaultGameMode == nullptr && !Settings->bUseProjectDefaultGameMode)
+		{
+			WorldSettings->DefaultGameMode = Settings->DefaultGameMode;
+		}
 		World->SetGameMode({});
 	}
 	

@@ -76,7 +76,11 @@ class COMMONAUTOMATION_API UCommonAutomationSettings: public UDeveloperSettings
 	GENERATED_BODY()
 public:
 
+	UCommonAutomationSettings(const FObjectInitializer& Initializer);
+
+	/** @return automation settings */
 	static const UCommonAutomationSettings* Get();
+	static UCommonAutomationSettings* GetMutable();
 
 	virtual void PostInitProperties() override;
 #if WITH_EDITOR
@@ -90,10 +94,16 @@ public:
 	const TArray<UClass*>& GetDisabledSubsystems() const;
 
 	FORCEINLINE const TArray<FDirectoryPath>& GetAssetPaths() const { return AutomationAssetPaths; }
-	
+
+	UPROPERTY(EditAnywhere, Config)
+	bool bUseProjectDefaultGameMode = false;
+
+	UPROPERTY(EditAnywhere, Config, meta = (Validate, EditCondition = "!bUseProjectDefaultGameMode"))
+	TSubclassOf<AGameModeBase> DefaultGameMode;
+
 protected:
 
-	UPROPERTY(EditAnywhere, Config, meta = (DisplayName = "Asset Paths For Automation", LongPackageName))
+	UPROPERTY(EditAnywhere, Config, meta = (Validate, DisplayName = "Asset Paths For Automation", LongPackageName))
 	TArray<FDirectoryPath> AutomationAssetPaths;
 	
 	UPROPERTY(EditAnywhere, Config)
