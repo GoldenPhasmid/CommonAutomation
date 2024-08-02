@@ -8,18 +8,18 @@
 
 DEFINE_LOG_CATEGORY(LogCommonAutomation);
 
-FAssetData UE::Automation::FindAssetDataByName(const FString& AssetName, EPackageFlags RequiredFlags, UClass* ClassFilter)
+FAssetData UE::Automation::FindAssetDataByName(const FString& AssetName, EPackageFlags RequiredFlags, const UClass* ClassFilter)
 {
 	const IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	
 	FString Paths{};
 	for (const FDirectoryPath& Path: UCommonAutomationSettings::Get()->GetAssetPaths())
 	{
-		FString WorldPackagePath = Path.Path / AssetName;
-		if (FPackageName::IsValidLongPackageName(WorldPackagePath) && FPackageName::DoesPackageExist(WorldPackagePath))
+		FString AssetPath = Path.Path / AssetName;
+		if (FPackageName::IsValidLongPackageName(AssetPath) && FPackageName::DoesPackageExist(AssetPath))
 		{
 			TArray<FAssetData> Assets;
-			AssetRegistry.GetAssetsByPackageName(FName{WorldPackagePath}, Assets);
+			AssetRegistry.GetAssetsByPackageName(FName{AssetPath}, Assets);
 
 			for (const FAssetData& AssetData: Assets)
 			{
@@ -30,10 +30,32 @@ FAssetData UE::Automation::FindAssetDataByName(const FString& AssetName, EPackag
 				}
 			}
 		}
-		Paths += WorldPackagePath + TEXT("\n");
+		Paths += AssetPath + TEXT("\n");
 	}
 	
 	UE_LOG(LogCommonAutomation, Error, TEXT("%s: Failed to find asset %s. All matches failed: \n%s"), *FString(__FUNCTION__), *AssetName, *Paths);
+	return FAssetData{};
+}
+
+FAssetData UE::Automation::FindAssetDataByPath(const FString& AssetPath, EPackageFlags RequiredFlags, const UClass* ClassFilter)
+{
+	const IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	if (FPackageName::IsValidLongPackageName(AssetPath) && FPackageName::DoesPackageExist(AssetPath))
+	{
+		TArray<FAssetData> Assets;
+		AssetRegistry.GetAssetsByPackageName(FName{AssetPath}, Assets);
+
+		for (const FAssetData& AssetData: Assets)
+		{
+			if (AssetData.HasAllPackageFlags(RequiredFlags) &&
+				(ClassFilter == nullptr || AssetData.AssetClassPath == ClassFilter->GetClassPathName()))
+			{
+				return AssetData;
+			}
+		}
+	}
+
+	UE_LOG(LogCommonAutomation, Error, TEXT("%s: Failed to find asset %s."), *FString(__FUNCTION__), *AssetPath);
 	return FAssetData{};
 }
 

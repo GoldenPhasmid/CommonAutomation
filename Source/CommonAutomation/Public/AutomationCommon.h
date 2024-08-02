@@ -26,9 +26,15 @@ namespace UE::Automation
 	{
 		return FindAssetDataByName(AssetName, RequiredFlags, T::StaticClass());
 	}
+
+	template <typename T>
+	FAssetData FindAssetDataByPath(const FString& AssetPath, EPackageFlags RequiredFlags = EPackageFlags::PKG_None)
+	{
+		return FindAssetDataByPath(AssetPath, RequiredFlags, T::StaticClass());
+	}
 	
 	/**
-	 * @return asset data for an asset specified by name
+	 * @return asset data for an asset specified by name.
 	 * @param AssetName
 	 * @param RequiredFlags
 	 * @param ClassFilter
@@ -36,7 +42,19 @@ namespace UE::Automation
 	COMMONAUTOMATION_API FAssetData	FindAssetDataByName(
 		const FString& AssetName,
 		EPackageFlags RequiredFlags = EPackageFlags::PKG_None,
-		UClass* ClassFilter = nullptr
+		const UClass* ClassFilter = nullptr
+	);
+
+	/**
+	 * @return asset data for an asset specified by full path.
+	 * @param AssetPath
+	 * @param RequiredFlags
+	 * @param ClassFilter
+	 */
+	COMMONAUTOMATION_API FAssetData FindAssetDataByPath(
+		const FString& AssetPath,
+		EPackageFlags RequiredFlags = EPackageFlags::PKG_None,
+		const UClass* ClassFilter = nullptr
 	);
 	
 	/**
