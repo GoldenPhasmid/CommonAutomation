@@ -20,6 +20,25 @@ struct COMMONAUTOMATION_API FAutomationTestCustomData
 
 namespace UE::Automation
 {
+	
+	/** @return newly created and registered actor component for @OwnerActor */
+	template <typename TComponentType>
+	TComponentType* CreateActorComponent(UWorld* World, AActor* OwnerActor, UClass* ComponentClass = TComponentType::StaticClass(), FName Name = NAME_None)
+	{
+		check(World != nullptr && OwnerActor != nullptr && ComponentClass != nullptr);
+		TComponentType* Component = NewObject<TComponentType>(OwnerActor, ComponentClass, Name);
+		Component->RegisterComponentWithWorld(World);
+
+		return Component;
+	}
+
+	/** create and register actor component for @OwnerActor */
+	template <typename TComponentType>
+	void AddActorComponent(UWorld* World, AActor* OwnerActor, UClass* ComponentClass = TComponentType::StaticClass(), FName Name = NAME_None)
+	{
+		CreateActorComponent<TComponentType>(World, OwnerActor, ComponentClass, Name);
+	}
+	
 	/** @return asset data for an asset specified by name */
 	template <typename T>
 	FAssetData FindAssetDataByName(const FString& AssetName, EPackageFlags RequiredFlags = EPackageFlags::PKG_None)
