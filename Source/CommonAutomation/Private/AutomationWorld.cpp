@@ -65,6 +65,7 @@ FObjectSubsystemCollection<TSubsystemType>* GetSubsystemCollection(T* Owner)
 }
 
 const FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
+const FAutomationWorldInitParams FAutomationWorldInitParams::WithBeginPlay{EWorldType::Game, EWorldInitFlags::WithBeginPlay};
 const FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
 const FAutomationWorldInitParams FAutomationWorldInitParams::WithLocalPlayer{EWorldType::Game, EWorldInitFlags::WithLocalPlayer};
 

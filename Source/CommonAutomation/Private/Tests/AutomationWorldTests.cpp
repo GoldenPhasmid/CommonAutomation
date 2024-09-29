@@ -140,6 +140,7 @@ bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
 		const APlayerController* PC = UGameplayStatics::GetPlayerController(WorldPtr->GetWorld(), 0);
 
 		UTEST_TRUE("World has first player controller", IsValid(PC));
+		UTEST_TRUE("First player controller has a pawn", IsValid(PC->GetPawn()));
 		UTEST_TRUE("World has first local player", IsValid(PC->GetLocalPlayer()));
 	}
 	
@@ -247,7 +248,6 @@ bool FAutomationWorld_NavigationSystemTest::RunTest(const FString& Parameters)
 
 	return !HasAnyErrors();
 }
-
 
 BEGIN_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests, "CommonAutomation.AutomationWorld.Flags", AutomationTestFlags)
 	void TestFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred);

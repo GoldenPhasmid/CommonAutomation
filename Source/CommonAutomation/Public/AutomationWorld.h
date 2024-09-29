@@ -196,6 +196,7 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	TArray<UClass*, TInlineAllocator<4>> PlayerSubsystems;
 
 	static const FAutomationWorldInitParams Minimal;
+	static const FAutomationWorldInitParams WithBeginPlay;
 	static const FAutomationWorldInitParams WithGameInstance;
 	static const FAutomationWorldInitParams WithLocalPlayer;
 };
@@ -365,6 +366,11 @@ public:
 	/** @return game instance */
 	UGameInstance* GetGameInstance() const;
 
+	template <typename T = AActor>
+	T* SpawnActor(UClass* Class = T::StaticClass(), const FTransform& Transform = FTransform::Identity, FActorSpawnParameters SpawnParams = FActorSpawnParameters{})
+	{
+		return CastChecked<T>(GetWorld()->SpawnActor(Class, &Transform, SpawnParams), ECastCheckedType::NullAllowed);
+	}
 	
 	/** @return actor with a given tag */
 	template <typename T = AActor>
