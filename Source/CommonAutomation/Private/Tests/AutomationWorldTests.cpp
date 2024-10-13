@@ -251,6 +251,7 @@ bool FAutomationWorld_NavigationSystemTest::RunTest(const FString& Parameters)
 
 BEGIN_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests, "CommonAutomation.AutomationWorld.Flags", AutomationTestFlags)
 	void TestFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred);
+	void TestEditorFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred);
 END_SIMPLE_AUTOMATION_TEST(FAutomationWorldFlagsTests)
 
 void FAutomationWorldFlagsTests::TestFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred)
@@ -262,6 +263,19 @@ void FAutomationWorldFlagsTests::TestFlag(EWorldInitFlags Flag, TFunction<bool(U
 
 	{
 		auto WorldPtr = FAutomationWorld::CreateGameWorld(EWorldInitFlags::None);
+		TestFalse(FString::Printf(TEXT("Flag %d not specified"), static_cast<uint32>(Flag)), Pred(WorldPtr->GetWorld()));
+	}
+}
+
+void FAutomationWorldFlagsTests::TestEditorFlag(EWorldInitFlags Flag, TFunction<bool(UWorld*)> Pred)
+{
+	{
+		auto WorldPtr = FAutomationWorld::CreateEditorWorld(Flag);
+		TestTrue(FString::Printf(TEXT("Flag %d works as expected"), static_cast<uint32>(Flag)), Pred(WorldPtr->GetWorld()));
+	}
+
+	{
+		auto WorldPtr = FAutomationWorld::CreateEditorWorld(EWorldInitFlags::None);
 		TestFalse(FString::Printf(TEXT("Flag %d not specified"), static_cast<uint32>(Flag)), Pred(WorldPtr->GetWorld()));
 	}
 }
@@ -307,7 +321,16 @@ bool FAutomationWorldFlagsTests::RunTest(const FString& Parameters)
 		return World->FXSystem != nullptr;
 	});
 	TestFlag(EWorldInitFlags::InitWorldPartition, [](UWorld* World) {
-		return World->GetWorldPartition() != nullptr && World->GetWorldPartition()->IsInitialized();
+		UWorldPartition* WorldPartition = World->GetWorldPartition();
+		return WorldPartition && WorldPartition->IsInitialized() && WorldPartition->AlwaysLoadedActors == nullptr;
+	});
+	TestEditorFlag(EWorldInitFlags::InitWorldPartition, [](UWorld* World) {
+		UWorldPartition* WorldPartition = World->GetWorldPartition();
+		return WorldPartition && WorldPartition->IsInitialized() && WorldPartition->AlwaysLoadedActors != nullptr;
+	});
+	TestFlag(EWorldInitFlags::InitWorldPartition | EWorldInitFlags::DisableStreaming, [](UWorld* World) {
+		UWorldPartition* WorldPartition = World->GetWorldPartition();
+		return WorldPartition && WorldPartition->bEnableStreaming == false;
 	});
 
 	return !HasAnyErrors();

@@ -30,10 +30,11 @@ enum class EWorldInitFlags: uint32
 	InitCollision		= 1 << 7,	// If set, will initialize collision handler
 	InitFX				= 1 << 8,	// If set, will initialize FXSystem
 	InitWorldPartition	= 1 << 9,	// If set, will create and initialize UWorldPartition
+	DisableStreaming	= 1 << 10,  // If set, will enable streaming for UWorldPartition
 
-	CreateGameInstance  = 1 << 10,	// creates game instance and game mode during initialization. By default, automation world runs without them
-	CreateLocalPlayer	= 1 << 11,	// creates local player during initialization
-	StartPlay			= 1 << 12,	// calls BeginPlay during initialization
+	CreateGameInstance  = 1 << 11,	// creates game instance and game mode during initialization. By default, automation world runs without them
+	CreateLocalPlayer	= 1 << 12,	// creates local player during initialization
+	StartPlay			= 1 << 13,	// calls BeginPlay during initialization
 
 	// @todo investigate if InitScene can be removed from default options
 	Minimal				= InitScene | StartPlay,											// initializes scene and calls BeginPlay for game worlds
@@ -161,7 +162,8 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	FORCEINLINE bool HasWorldPackage() const { return WorldPackage.IsSet(); }
 	FORCEINLINE FString GetWorldPackage() const { return WorldPackage.GetValue(); }
 	
-	FORCEINLINE bool ShouldInitScene() const;
+	bool ShouldInitScene() const;
+	bool ShouldInitWorldPartition() const;
 	FORCEINLINE bool CreateGameInstance() const { return !!(InitFlags & EWorldInitFlags::CreateGameInstance); }
 	FORCEINLINE bool CreatePrimaryPlayer() const { return !!(InitFlags & EWorldInitFlags::CreateLocalPlayer); }
 	FORCEINLINE bool RouteStartPlay() const { return !!(InitFlags & EWorldInitFlags::StartPlay); }
@@ -415,7 +417,7 @@ private:
 	USubsystem* AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer);
 	
 	void CreateGameInstance(const FAutomationWorldInitParams& InitParams);
-	void CreateViewportClient(); 
+	void CreateViewportClient();
 
 	const TArray<UWorldSubsystem*>& GetWorldSubsystems() const;
 

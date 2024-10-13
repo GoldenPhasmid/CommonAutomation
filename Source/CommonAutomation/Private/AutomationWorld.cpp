@@ -90,7 +90,8 @@ FWorldInitializationValues FAutomationWorldInitParams::CreateWorldInitValues() c
 			  .EnableTraceCollision(!!(InitFlags & EWorldInitFlags::InitCollision))
 			  .SetTransactional(false) // @todo: does transactional ever matters for game worlds?
 			  .CreateFXSystem(!!(InitFlags & EWorldInitFlags::InitFX))
-			  .CreateWorldPartition(!!(InitFlags & EWorldInitFlags::InitWorldPartition));
+			  .CreateWorldPartition(ShouldInitWorldPartition())
+			  .EnableWorldPartitionStreaming(!(InitFlags & EWorldInitFlags::DisableStreaming));
 	if (DefaultGameMode != nullptr)
 	{
 		// override world settings game mode. If DefaultGM is null and WorldSettings GM null, then project's default GM will be used
@@ -105,6 +106,12 @@ bool FAutomationWorldInitParams::ShouldInitScene() const
 	constexpr EWorldInitFlags ShouldInitScene = EWorldInitFlags::InitScene | EWorldInitFlags::InitPhysics | EWorldInitFlags::InitWeldedBodies |
 												EWorldInitFlags::InitHitProxy | EWorldInitFlags::InitCollision | EWorldInitFlags::InitFX;
 	return !!(InitFlags & ShouldInitScene);
+}
+
+bool FAutomationWorldInitParams::ShouldInitWorldPartition() const
+{
+	constexpr EWorldInitFlags ShouldInitWorldPartition = EWorldInitFlags::InitWorldPartition;
+	return !!(InitFlags & ShouldInitWorldPartition);
 }
 
 FAutomationWorldPtr FAutomationWorldInitParams::Create() const
@@ -206,8 +213,12 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	InitFlags = InitParams.InitFlags;
 
 	{
+		// hack: world partition requires PIE world type to initialize properly for game worlds
+		TGuardValue Guard{World->WorldType, World->IsGameWorld() ? EWorldType::PIE : World->WorldType.GetValue()};
+		
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{InitParams.WorldSubsystems};
 		World->InitWorld(InitParams.CreateWorldInitValues());
+		
 		WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
 	}
 	
