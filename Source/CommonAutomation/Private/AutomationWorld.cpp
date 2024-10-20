@@ -2,6 +2,7 @@
 
 #include "AutomationCommon.h"
 #include "AutomationGameInstance.h"
+#include "CommonAutomationModule.h"
 #include "CommonAutomationSettings.h"
 #include "DummyViewport.h"
 #include "EngineUtils.h"
@@ -14,6 +15,13 @@
 #include "GameFramework/GameModeBase.h"
 #include "Streaming/LevelStreamingDelegates.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
+
+static bool GRunGarbageCollectionForEveryWorld = false;
+static FAutoConsoleVariableRef RunGarbageCollectionForEveryWorld(
+	TEXT("CommonAutomation.RunGCForEveryWorld"),
+	GRunGarbageCollectionForEveryWorld,
+	TEXT("If set, garbage collection runs every time automation world is destroyed")
+);
 
 template <typename TSubsystemType>
 struct FScopeDisableSubsystemCreation
@@ -331,9 +339,9 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 #if WITH_EDITOR
 		if (GIsEditor)
 		{
-			// Clear RF_Standalone flag that keeps tile worlds from being GC'd in editor
+			// Clear RF_Standalone flag that keeps sublevel worlds from being GC'd in editor
 			UWorld* LevelOuterWorld = LevelIfLoaded->GetTypedOuter<UWorld>();
-			// sanity check that tile world is not our main world
+			// sanity check that sublevel world is not a main world
 			check(LevelOuterWorld != World);
 			LevelOuterWorld->ClearFlags(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
@@ -343,7 +351,7 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 
 FAutomationWorld::~FAutomationWorld()
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld::DestroyWorld);
+	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_DestroyWorld);
 	
 	check(IsValid(World));
 	FLevelStreamingDelegates::OnLevelStreamingStateChanged.Remove(StreamingStateHandle);
@@ -386,7 +394,15 @@ FAutomationWorld::~FAutomationWorld()
 	// restore globals and garbage collect the world
 	GFrameCounter = InitialFrameCounter;
 	GWorld = PrevGWorld;
-	GEngine->ForceGarbageCollection();
+	
+	FCommonAutomationModule::RequestGC();
+	if (GRunGarbageCollectionForEveryWorld)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_RunGC);
+
+		constexpr bool bFullPurge = true;
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, bFullPurge);
+	}
 	
 	bExists = false;
 }
@@ -399,7 +415,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 		return nullptr;
 	}
 
-	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld::CreateWorld);
+	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_CreateWorld);
 	
 	UWorld* NewWorld = nullptr;
 	// load game world flow
