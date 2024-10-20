@@ -290,8 +290,15 @@ void FAutomationWorld::CreateViewportClient()
 	check(WorldContext && GameInstance);
 	// create game viewport client to avoid ensures
 	UGameViewportClient* NewViewport = NewObject<UGameViewportClient>(GameInstance->GetEngine());
-	NewViewport->Init(*WorldContext, GameInstance, false);
 
+	{
+		// this is a stupid way to block UGameViewportClient from creating a new audio device because bCreateAudioDevice is not used
+		TGuardValue<UEngine*> _{GEngine, nullptr};
+
+		constexpr bool bCreateAudioDevice = false;
+		NewViewport->Init(*WorldContext, GameInstance, bCreateAudioDevice);
+	}
+	
 	// Set the overlay widget, to avoid an ensure
 	TSharedRef<SOverlay> DudOverlay = SNew(SOverlay);
 
