@@ -1,10 +1,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameFramework/GameModeBase.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 
 #include "AutomationWorldTests.generated.h"
+
+UCLASS(HideDropdown)
+class ACommonAutomationGameMode: public AGameModeBase
+{
+	GENERATED_BODY()
+};
 
 UCLASS(HideDropdown)
 class UTestWorldSubsystem: public UWorldSubsystem

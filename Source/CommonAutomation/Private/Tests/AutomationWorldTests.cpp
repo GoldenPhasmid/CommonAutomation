@@ -3,6 +3,7 @@
 
 #include "AutomationTestDefinition.h"
 #include "AutomationWorld.h"
+#include "CommonAutomationSettings.h"
 #include "EngineUtils.h"
 #include "GameInstanceAutomationSupport.h"
 #include "NavigationSystem.h"
@@ -30,7 +31,7 @@ bool UTestGameInstanceSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 	return UE::Private::bTestSubsystemEnabled;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_CreateWorldUniqueTest, "CommonAutomation.AutomationWorld.CreateWorld returns unique world", AutomationTestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_CreateWorldUniqueTest, "CommonAutomation.AutomationWorld.CreateWorld", AutomationTestFlags)
 
 bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
 {
@@ -57,7 +58,7 @@ bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_LoadWorldUniqueTest, "CommonAutomation.AutomationWorld.LoadWorld returns unique world", AutomationTestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_LoadWorldUniqueTest, "CommonAutomation.AutomationWorld.LoadWorld", AutomationTestFlags)
 
 bool FAutomationWorld_LoadWorldUniqueTest::RunTest(const FString& Parameters)
 {
@@ -85,45 +86,45 @@ bool FAutomationWorld_LoadWorldUniqueTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldBehaviorTests, "CommonAutomation.AutomationWorld.Behavior", AutomationTestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorldCoreTests, "CommonAutomation.AutomationWorld.Core", AutomationTestFlags)
 
-bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
+bool FAutomationWorldCoreTests::RunTest(const FString& Parameters)
 {
 	{
 		// guarantees with a basic game world.
 		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorld();
-
+		
 		const UWorld* World = WorldPtr->GetWorld();
+		const UPackage* Package = World->GetPackage();
 		UTEST_TRUE("Automation world is running", FAutomationWorld::Exists() == true);
-		UTEST_TRUE("Automation world returns a valid world", IsValid(World));
+		UTEST_TRUE("Automation world returns a valid world", IsValid(World) && IsValid(Package));
 		UTEST_TRUE("World is part of a root set", World->IsRooted() == true);
 		UTEST_TRUE("World is initialized", World->bIsWorldInitialized);
 		UTEST_TRUE("GWorld equals to new world", GWorld == World);
 		UTEST_TRUE("World has world context", GEngine->GetWorldContextFromWorld(World) != nullptr);
+		UTEST_TRUE("World doesnt have game instance", WorldPtr->GetWorld()->GetGameInstance() == nullptr);
+		UTEST_TRUE("World doesnt have game mode", WorldPtr->GetWorld()->GetAuthGameMode() == nullptr);
 	
-		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, false);
-		UTEST_TRUE("Automation world is valid after garbage collection", IsValid(World));
+		constexpr bool bFullPurge = true;
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, bFullPurge);
+		UTEST_TRUE("Automation world is valid after GC", IsValid(World) && IsValid(Package));
 
 		WorldPtr.Reset();
-		UTEST_TRUE("Automation world no longer running running", FAutomationWorld::Exists() == false);
+		
+		UTEST_TRUE("Automation world is no longer running", FAutomationWorld::Exists() == false);
 		UTEST_TRUE("World is not longer a part of a root set", World->IsRooted() == false);
-		// UTEST_TRUE("Automation world is no longer valid", !IsValid(World)); // @todo: not guaranteed if gc hasn't run. Mark world as garbage?
-	}
+		
+		WorldPtr = FAutomationWorld::CreateGameWorld();
 
-	{
-		// game mode is not created by default
-		// @todo: this is not true, because project game mode will override game mode from world settings. Is this a desired behavior?
-		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorld();
-		UTEST_TRUE("World doesnt have game mode", WorldPtr->GetWorld()->GetAuthGameMode() == nullptr);
+		const UWorld* OtherWorld = WorldPtr->GetWorld();
+		UTEST_TRUE("New automation world is different", World != OtherWorld);
+		const UPackage* OtherPackage = WorldPtr->GetWorld()->GetPackage();
+		UTEST_TRUE("New automation world has different package", Package != OtherPackage);
+		
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, bFullPurge);
+		UTEST_TRUE("Automation world is not valid after GC", !World->IsValidLowLevel() && !Package->IsValidLowLevel());
 	}
-
-	{
-		// game mode is created when specified
-		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance<AGameMode>();
-		UTEST_TRUE("World contains game mode", WorldPtr->GetWorld()->GetAuthGameMode() != nullptr);
-		UTEST_TRUE("Game mode matches requested", WorldPtr->GetWorld()->GetAuthGameMode()->IsA<AGameMode>());
-	}
-
+	
 	{
 		// game instance creation functionality
 		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance();
@@ -135,7 +136,28 @@ bool FAutomationWorldBehaviorTests::RunTest(const FString& Parameters)
 	}
 
 	{
-		// player creation functionality
+		// game mode is created when specified
+		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance<ACommonAutomationGameMode>();
+		const AGameModeBase* GameMode = WorldPtr->GetGameMode();
+		UTEST_TRUE("World contains game mode", GameMode != nullptr);
+		UTEST_TRUE("Game mode matches requested", GameMode->IsA<ACommonAutomationGameMode>());
+	}
+
+	{
+		// automation world uses DefaultGameMode specified in Project Settings when said so
+		UCommonAutomationSettings& Settings = *UCommonAutomationSettings::GetMutable();
+		TGuardValue _{Settings.bUseProjectDefaultGameMode, false};
+		TGuardValue<TSubclassOf<AGameModeBase>> __{Settings.DefaultGameMode, ACommonAutomationGameMode::StaticClass()};
+
+		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithGameInstance();
+		const AGameModeBase* GameMode = WorldPtr->GetGameMode();
+		UTEST_TRUE("World contains game mode", GameMode != nullptr);
+		UTEST_TRUE("Game mode matches default game mode from Project Settings", GameMode->IsA<ACommonAutomationGameMode>());
+	}
+
+
+	{
+		// CreateWorldWithPlayer creates a single player controller, local player and player pawn
 		FAutomationWorldPtr WorldPtr = FAutomationWorld::CreateGameWorldWithPlayer();
 		const APlayerController* PC = UGameplayStatics::GetPlayerController(WorldPtr->GetWorld(), 0);
 
@@ -233,7 +255,7 @@ bool FAutomationWorld_NavigationSystemTest::RunTest(const FString& Parameters)
 		FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateEditorWorld(EWorldInitFlags::InitScene | EWorldInitFlags::InitNavigation);
 
 		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(*ScopedWorld);
-		UTEST_TRUE("UCominoNavigationSystem is created for editor world", IsValid(NavSys));
+		UTEST_TRUE("Navigation system is created for editor world", IsValid(NavSys));
 		UTEST_TRUE("Navigation system is initialized for world", NavSys->IsInitialized() && NavSys->IsWorldInitDone());
 	}
 
