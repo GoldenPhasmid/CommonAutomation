@@ -416,6 +416,11 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	}
 
 	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_CreateWorld);
+
+	FAutomationTestBase* Test = FAutomationTestFramework::Get().GetCurrentTest();
+	check(Test);
+	
+	const FString CurrentTestName = FAutomationTestFramework::Get().GetCurrentTest()->GetBeautifiedTestName();
 	
 	UWorld* NewWorld = nullptr;
 	// load game world flow
@@ -444,7 +449,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 			return nullptr;
 		}
 		
-		UPackage* WorldPackage = CreateUniqueWorldPackage(FString::Printf(TEXT("%s_%s"), TEXT("AutomationWorld"), *WorldPackageToLoad));
+		UPackage* WorldPackage = CreateUniqueWorldPackage(FString::Printf(TEXT("%s_%s"), *CurrentTestName, *WorldPackageToLoad));
 
 		const FName WorldPackageName{WorldPackageToLoad};
 		UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageName) = InitParams.WorldType;
@@ -472,7 +477,7 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	if (NewWorld == nullptr)
 	{
 		// create unique package for an empty world
-		UPackage* WorldPackage = CreateUniqueWorldPackage(TEXT("AutomationWorldPackage"));
+		UPackage* WorldPackage = CreateUniqueWorldPackage(*CurrentTestName);
 
 		// create an empty world
 		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
