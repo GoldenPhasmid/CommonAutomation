@@ -367,6 +367,18 @@ public:
 	FWorldContext* GetWorldContext() const;
 	/** @return game instance */
 	UGameInstance* GetGameInstance() const;
+	/** @return auth game mode */
+	template <typename T = AGameModeBase>
+	T* GetGameMode() const
+	{
+		return World->GetAuthGameMode<T>();
+	}
+	/** @return game state */
+	template <typename T = AGameStateBase>
+	AGameStateBase* GetGameState() const
+	{
+		return World->GetGameState<T>();
+	}
 
 	template <typename T = AActor>
 	T* SpawnActor(UClass* Class = T::StaticClass(), const FTransform& Transform = FTransform::Identity, FActorSpawnParameters SpawnParams = FActorSpawnParameters{})
