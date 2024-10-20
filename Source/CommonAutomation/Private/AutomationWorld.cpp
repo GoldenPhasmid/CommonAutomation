@@ -456,11 +456,11 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	if (NewWorld == nullptr)
 	{
 		// create unique package for an empty world
-		UPackage* WorldPackage = CreateUniqueWorldPackage(TEXT("AutomationWorld"));
+		UPackage* WorldPackage = CreateUniqueWorldPackage(TEXT("AutomationWorldPackage"));
 
 		// create an empty world
 		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
-		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, NAME_None, WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
+		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, TEXT("AutomationWorld"), WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
 	}
 
 	if (NewWorld == nullptr)
