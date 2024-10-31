@@ -13,6 +13,7 @@
 #include "AssetRegistry/AssetRegistryHelpers.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameModeBase.h"
+#include "Kismet/GameplayStatics.h"
 #include "Streaming/LevelStreamingDelegates.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 
@@ -26,8 +27,11 @@ static FAutoConsoleVariableRef RunGarbageCollectionForEveryWorld(
 template <typename TSubsystemType>
 struct FScopeDisableSubsystemCreation
 {
+	FScopeDisableSubsystemCreation()
+		: FScopeDisableSubsystemCreation({})
+	{}
+	
 	FScopeDisableSubsystemCreation(TConstArrayView<UClass*> InEnabledSubsystems)
-		: EnabledSubsystems(InEnabledSubsystems)
 	{
 		DisabledSubsystems = UCommonAutomationSettings::Get()->GetDisabledSubsystems<TSubsystemType>();
 		// filter enabled subsystems from default settings
@@ -56,7 +60,6 @@ struct FScopeDisableSubsystemCreation
 	}
 
 private:
-	TConstArrayView<UClass*> EnabledSubsystems;
 	TArray<UClass*> DisabledSubsystems;
 };
 
@@ -132,6 +135,7 @@ UGameInstance* FAutomationWorld::SharedGameInstance = nullptr;
 
 
 FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
+	: CachedInitParams(InitParams)
 {
 	bExists = true;
 	InitialFrameCounter = GFrameCounter;
@@ -202,14 +206,32 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	// Step 3: initialize world settings
 	AWorldSettings* WorldSettings = World->GetWorldSettings();
 	// if world package is specified it means world was loaded from existing asset and not created from scratch
-	// such worlds can have game mode pre-defined to a specific one, so we don't want to override it
-	if (!InitParams.HasWorldPackage() && InitParams.DefaultGameMode)
+	// such worlds can have game mode pre-defined to a specific one, so we don't want to override it, UNLESS DefaultGameMode is nullptr
+	if (InitParams.DefaultGameMode != nullptr)
 	{
-		// override default game mode if the world is created and not loaded
-		WorldSettings->DefaultGameMode = InitParams.DefaultGameMode;
+		if ((!InitParams.HasWorldPackage() || WorldSettings->DefaultGameMode == nullptr))
+		{
+			// override default game mode if the world is created and not loaded
+			WorldSettings->DefaultGameMode = InitParams.DefaultGameMode;
+		}
+		else
+		{
+			// log an error to fail the test
+			// for now it is incorrect to call SetGameMode for a loaded world with already has a set game mode
+			UE_LOG(LogCommonAutomation, Error, TEXT("%s: SetGameMode was called for world %s that has a valid game mode"),
+				*FAutomationTestFramework::Get().GetCurrentTestFullPath(), *InitParams.GetWorldPackage());	
+		}
 	}
+	const UCommonAutomationSettings* Settings = UCommonAutomationSettings::Get();
+	// fixup world settings game mode if we don't want to use heavy project default game mode, for both created and loaded worlds
+	if (WorldSettings->DefaultGameMode == nullptr && !Settings->bUseProjectDefaultGameMode)
+	{
+		WorldSettings->DefaultGameMode = Settings->DefaultGameMode;
+	}
+	CachedGameMode = WorldSettings->DefaultGameMode;
 	
 	// Step 4: invoke callbacks that should happen before world is fully initialized
+	// @todo: execute delegates after OnWorldInitialized delegate is executed?
 	InitParams.InitWorld.ExecuteIfBound(World);
 	InitParams.InitWorldSettings.ExecuteIfBound(WorldSettings);
 	
@@ -217,13 +239,12 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	World->WorldType = InitParams.WorldType;
 	// tick viewports only in editor worlds
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
-	// cache init flags for later use
-	InitFlags = InitParams.InitFlags;
 
 	{
 		// hack: world partition requires PIE world type to initialize properly for game worlds
 		TGuardValue Guard{World->WorldType, World->IsGameWorld() ? EWorldType::PIE : World->WorldType.GetValue()};
-		
+
+		// disable world subsystems not required for this automation world
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{InitParams.WorldSubsystems};
 		World->InitWorld(InitParams.CreateWorldInitValues());
 		
@@ -232,12 +253,6 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	
 	if (GameInstance != nullptr)
 	{
-		const UCommonAutomationSettings* Settings = UCommonAutomationSettings::Get();
-		// fixup world settings game mode if we don't want to use heavy project default game mode, for both created and loaded worlds
-		if (WorldSettings->DefaultGameMode == nullptr && !Settings->bUseProjectDefaultGameMode)
-		{
-			WorldSettings->DefaultGameMode = Settings->DefaultGameMode;
-		}
 		World->SetGameMode({});
 	}
 	
@@ -247,7 +262,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	// Make sure secondary levels are loaded & visible.
 	World->FlushLevelStreaming();
 
-	if (IsEditorWorld() && !!(InitFlags & EWorldInitFlags::InitNavigation))
+	if (IsEditorWorld() && !!(CachedInitParams.InitFlags & EWorldInitFlags::InitNavigation))
 	{
 		// initialize navigation system for editor worlds
 		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::EditorMode);
@@ -258,6 +273,7 @@ void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& Init
 {
 	if (SharedGameInstance == nullptr)
 	{
+		// @todo: add ability to override game instance class
 		const UClass* GameInstanceClass = GetDefault<UGameMapsSettings>()->GameInstanceClass.TryLoadClass<UGameInstance>();
 		if (GameInstanceClass == nullptr || !GameInstanceClass->ImplementsInterface(UGameInstanceAutomationSupport::StaticClass()))
 		{
@@ -664,7 +680,7 @@ USubsystem* FAutomationWorld::AddAndInitializeSubsystem(FSubsystemCollectionBase
 	return Subsystem;
 }
 
-ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer()
+ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer(bool bSpawnPlayerController)
 {
 	check(World && WorldContext);
 	if (UNLIKELY(World->WorldType == EWorldType::Editor))
@@ -677,10 +693,10 @@ ULocalPlayer* FAutomationWorld::GetOrCreatePrimaryPlayer()
 		return PrimaryPlayer;
 	}
 
-	return CreateLocalPlayer();
+	return CreateLocalPlayer(bSpawnPlayerController);
 }
 
-ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
+ULocalPlayer* FAutomationWorld::CreateLocalPlayer(bool bSpawnPlayerController)
 {
 	check(World && WorldContext);
 	if (UNLIKELY(World->WorldType == EWorldType::Editor))
@@ -697,9 +713,9 @@ ULocalPlayer* FAutomationWorld::CreateLocalPlayer()
 
 			const TArray<ULocalPlayer*>& LocalPlayers = GEngine->GetGamePlayers(World);
 			
-			FString Error;
-			FScopeDisableSubsystemCreation<ULocalPlayerSubsystem> Scope{PlayerSubsystems};
-			ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, true);
+			FString Error{};
+			FScopeDisableSubsystemCreation<ULocalPlayerSubsystem> Scope{CachedInitParams.PlayerSubsystems};
+			ULocalPlayer* LocalPlayer = GameInstance->CreateLocalPlayer(LocalPlayers.Num(), Error, bSpawnPlayerController);
 
 			checkf(Error.IsEmpty(), TEXT("%s"), *Error);
 
@@ -740,7 +756,7 @@ void FAutomationWorld::RouteStartPlay() const
 	FURL URL{};
 	World->InitializeActorsForPlay(URL);
 	
-	if (!!(InitFlags & EWorldInitFlags::InitNavigation))
+	if (!!(CachedInitParams.InitFlags & EWorldInitFlags::InitNavigation))
 	{
 		// initialize navigation system for game worlds if requested
 		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::GameMode);
@@ -808,6 +824,58 @@ void FAutomationWorld::TickWorld(int32 NumFrames)
 		++GFrameCounter;
 		--NumFrames;
 	}
+}
+
+void FAutomationWorld::AbsoluteWorldTravel(TSoftObjectPtr<UWorld> WorldToTravel, TSubclassOf<AGameModeBase> GameModeClass, FString TravelOptions)
+{
+	check(World && World->bIsWorldInitialized);
+	if (IsEditorWorld())
+	{
+		// no travel for editor worlds
+		return;
+	}
+
+	if (GameModeClass != nullptr)
+	{
+		TravelOptions += TEXT("GAME=") + FSoftClassPath{GameModeClass}.ToString();
+	}
+	
+	UGameplayStatics::OpenLevelBySoftObjectPtr(World, WorldToTravel, true, TravelOptions);
+	
+	FinishWorldTravel();
+}
+
+void FAutomationWorld::FinishWorldTravel()
+{
+	check(World && World->bIsWorldInitialized);
+
+	if (IsEditorWorld())
+	{
+		// no travel for editor worlds
+		return;
+	}
+
+	if (!World->HasBegunPlay())
+    {
+    	// can't travel from the world that hasn't begun play
+    	RouteStartPlay();
+    }
+	
+	{
+		// hack: world partition requires PIE world type to initialize properly for game worlds
+		TGuardValue Guard{World->WorldType, World->IsGameWorld() ? EWorldType::PIE : World->WorldType.GetValue()};
+
+		// disable world subsystems not required for this automation world
+		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{CachedInitParams.WorldSubsystems};
+		GEngine->TickWorldTravel(*WorldContext, World->NextSwitchCountdown);
+	}
+	
+	// set new world from a world context
+	World = WorldContext->World();
+	check(World && World->bIsWorldInitialized);
+
+	// update world collection pointer
+	WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
 }
 
 UWorld* FAutomationWorld::GetWorld() const

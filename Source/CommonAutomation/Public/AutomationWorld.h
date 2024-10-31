@@ -213,9 +213,8 @@ using FWorldInitParams = FAutomationWorldInitParams;
 /**
  * RAII wrapper to create, initialize and destroy a world. Can be used to test various levels in Game mode and Editor mode.
  * It is designed to run in a single automation test scope and destroyed after test has finished.
- * Automation world should not be stored or explicitly destroyed by calling Reset when the test has finished. You cannot
- * create multiple instances of an automation world by design, you will get an assertion
- * Sets GWorld and other global properties to try to behave as close as possible to the real world in PIE/Game
+ * Automation world tries to behave as close as possible to the real game/editor world.
+ * Automation test cannot create multiple instances of automation world - in real game scenario, there's one global world and one global game instance.
  *
  * In common case you create automation world at the beginning of your test setup, either inside FAutomationTest or FAutomationSpec:
  *
@@ -240,7 +239,12 @@ using FWorldInitParams = FAutomationWorldInitParams;
  *		});
  *	}
  *
- * Each 
+ *	CreateWorld function family creates a new empty world from scratch.
+ *	LoadWorld	function family requires a valid world package located on disk or in memory.
+ *	Use LoadWorld only for tests that require explicit setup in editor, like pathfinding or building navigation. Otherwise, prefer creating world from scratch.
+ *	
+ *	You can further customize world initialization by creating FAutomationWorldInitParams structure as a CreateWorld argument.
+ *	@see AutomationWorldTests.cpp to check for full invariants that automation world provides and various ways to initialize it.
  */
 class COMMONAUTOMATION_API FAutomationWorld
 {
@@ -344,10 +348,10 @@ public:
 	}
 	
 	/** create primary player for this world. If player has already been created, return it */
-	ULocalPlayer* GetOrCreatePrimaryPlayer();
+	ULocalPlayer* GetOrCreatePrimaryPlayer(bool bSpawnPlayerController = true);
 	
 	/** create new local player instance, along with PlayerController, HUD, etc. */
-	ULocalPlayer* CreateLocalPlayer();
+	ULocalPlayer* CreateLocalPlayer(bool bSpawnPlayerController = true);
 
 	/** perform logout for given local player */
 	void DestroyLocalPlayer(ULocalPlayer* LocalPlayer);
@@ -357,9 +361,25 @@ public:
 
 	/** tick active world */
 	void TickWorld(int32 NumFrames);
-	
+
 	/** route end play event to world and actors */
 	void RouteEndPlay() const;
+
+	/**
+	* travel to a new world initiated via UGameplayStatics::OpenLevel
+	 * After completion, GetWorld() will return a newly loaded world. Game instance and local players are unchanged
+	 * Does nothing if there's not pending travel
+	 * @param WorldToTravel world to travel
+	 * @param TravelOptions travel options
+	 */
+	void AbsoluteWorldTravel(TSoftObjectPtr<UWorld> WorldToTravel, TSubclassOf<AGameModeBase> GameModeClass = nullptr, FString TravelOptions = {});
+
+	/**
+	 * travel to a new world initiated via UGameplayStatics::OpenLevel
+	 * After completion, GetWorld() will return a newly loaded world. Game instance and local players are unchanged
+	 * Does nothing if there's not pending travel
+	 */
+	void FinishWorldTravel();
 
 	/** @return active world */
 	UWorld* GetWorld() const;
@@ -435,10 +455,11 @@ private:
 
 	/** Cached pointer to a world subsystem collection, retrieved in a fancy way from @World */
 	FObjectSubsystemCollection<UWorldSubsystem>* WorldCollection = nullptr;
-	/** Cached pointer to a game subsystem collection, retrieved in a fancy way from @GameInstance. can be null */
+	/**
+	 * Cached pointer to a game subsystem collection, retrieved in a fancy way from @GameInstance.
+	 * Can be null if game instance is not created for automation world
+	 */
 	FObjectSubsystemCollection<UGameInstanceSubsystem>* GameInstanceCollection = nullptr;
-	/** A list of player subsystems that should be created for a local player */
-	TArray<UClass*, TInlineAllocator<4>> PlayerSubsystems;
 	
 	UWorld* World = nullptr;
 	FWorldContext* WorldContext = nullptr;
@@ -453,8 +474,11 @@ private:
 	/** Handle to LevelStreamingStateChanged delegate */
 	FDelegateHandle StreamingStateHandle;
 
-	/** cached world init flags */
-	EWorldInitFlags InitFlags = EWorldInitFlags::None;
+	/** cached init params for this automation world */
+	FWorldInitParams CachedInitParams;
+	/** cached game mode, either overriden from init params or extracted from default world settings. If null, means project default game mode */
+	TSubclassOf<AGameModeBase> CachedGameMode;
+
 	/** cached tick type, different for game and editor world */
 	ELevelTick TickType = LEVELTICK_All;
 
