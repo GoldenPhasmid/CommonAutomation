@@ -90,22 +90,40 @@ public:
 	static const TArray<FName>& GetProjectModules();
     static bool IsProjectModuleClass(UClass* Class);
 
+	/** @return a list of disabled subsystems for each subsystem group: UWorldSubsystem, UGameInstanceSubsystem, ULocalPlayerSubsystem */
 	template <typename TSubsystemType>
-	const TArray<UClass*>& GetDisabledSubsystems() const;
+	TConstArrayView<UClass*> GetDisabledSubsystems() const;
 
 	FORCEINLINE const TArray<FDirectoryPath>& GetAssetPaths() const { return AutomationAssetPaths; }
 
+	/**
+	 * If set to false, automation world will use @DefaultGameMode if WorldSettings game mode is empty.
+	 * Otherwise, engine automatically uses project default game mode.
+	 * This option is created to break dependencies and void loading default game mode, as often it is heavy with code and asset dependencies
+	 */
 	UPROPERTY(EditAnywhere, Config)
 	bool bUseProjectDefaultGameMode = false;
 
+	/**
+	 * "Default" game mode for automation world, if @bUseProjectDefaultGameMode is set to false
+	 * If FWorldInitParams or map's WorldSettings doesn't specify a game mode, this game mode class is used instead
+	 */
 	UPROPERTY(EditAnywhere, Config, meta = (Validate, EditCondition = "!bUseProjectDefaultGameMode"))
 	TSubclassOf<AGameModeBase> DefaultGameMode;
 
 protected:
 
+	/**
+	 * A list of paths used for automation asset search.
+	 * This way assets can be referenced by name if they're located in one the listed paths
+	 */
 	UPROPERTY(EditAnywhere, Config, meta = (Validate, DisplayName = "Asset Paths For Automation", LongPackageName))
 	TArray<FDirectoryPath> AutomationAssetPaths;
-	
+
+	/**
+	 * If set, project and project plugin subsystems are NOT created by default when running automation world
+	 * You can still enable them manually via FWorldInitParams, or specify them as Enabled Subsystems in Project Settings
+	 */
 	UPROPERTY(EditAnywhere, Config)
 	bool bDisableProjectSubsystems = true;
 	
@@ -160,6 +178,7 @@ protected:
 		}
 	}
 
+	/** @return config key name for each subsystem group: UWorldSubsystem, UGameInstanceSubsystem, ULocalPlayerSubsystem */
 	template <typename TSubsystemType>
 	FString GetConfigKey() const = delete;
 	

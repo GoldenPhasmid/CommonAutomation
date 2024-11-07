@@ -23,19 +23,19 @@ FString UCommonAutomationSettings::GetConfigKey<ULocalPlayerSubsystem>() const
 }
 
 template <>
-const TArray<UClass*>& UCommonAutomationSettings::GetDisabledSubsystems<UWorldSubsystem>() const
+TConstArrayView<UClass*> UCommonAutomationSettings::GetDisabledSubsystems<UWorldSubsystem>() const
 {
 	return WorldSubsystemContainer.GetDisabledSubsystems(WorldSubsystems);
 }
 
 template <>
-const TArray<UClass*>& UCommonAutomationSettings::GetDisabledSubsystems<UGameInstanceSubsystem>() const
+TConstArrayView<UClass*> UCommonAutomationSettings::GetDisabledSubsystems<UGameInstanceSubsystem>() const
 {
 	return GameInstanceSubsystemContainer.GetDisabledSubsystems(GameInstanceSubsystems);
 }
 
 template <>
-const TArray<UClass*>& UCommonAutomationSettings::GetDisabledSubsystems<ULocalPlayerSubsystem>() const
+TConstArrayView<UClass*> UCommonAutomationSettings::GetDisabledSubsystems<ULocalPlayerSubsystem>() const
 {
 	return LocalPlayerSubsystemContainer.GetDisabledSubsystems(LocalPlayerSubsystems);
 }
