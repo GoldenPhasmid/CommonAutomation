@@ -52,7 +52,7 @@ struct FScopeDisableSubsystemCreation
 
 	~FScopeDisableSubsystemCreation()
 	{
-		// remove applied abstract flag
+		// remove applied CLASS_Abstract flag
 		for (UClass* SubsystemClass: DisabledSubsystems)
 		{
 			SubsystemClass->ClassFlags &= ~CLASS_Abstract;
@@ -863,15 +863,22 @@ void FAutomationWorld::FinishWorldTravel()
 	
 	{
 		// hack: world partition requires PIE world type to initialize properly for game worlds
-		TGuardValue Guard{World->WorldType, World->IsGameWorld() ? EWorldType::PIE : World->WorldType.GetValue()};
+		
+		FDelegateHandle WorldCreatedHandle = FWorldDelegates::OnPostWorldCreation.AddLambda([](const UWorld* World)
+		{
+			UWorld::WorldTypePreLoadMap.Add(World->GetFName(), EWorldType::PIE);
+		});
 
 		// disable world subsystems not required for this automation world
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{CachedInitParams.WorldSubsystems};
 		GEngine->TickWorldTravel(*WorldContext, World->NextSwitchCountdown);
+		
+		FWorldDelegates::OnPostWorldCreation.Remove(WorldCreatedHandle);
 	}
 	
 	// set new world from a world context
 	World = WorldContext->World();
+	World->WorldType = EWorldType::Game;
 	check(World && World->bIsWorldInitialized);
 
 	// update world collection pointer
