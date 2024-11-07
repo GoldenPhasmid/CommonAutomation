@@ -11,11 +11,9 @@ DEFINE_LOG_CATEGORY(LogCommonAutomation);
 FAssetData UE::Automation::FindAssetDataByName(const FString& AssetName, EPackageFlags RequiredFlags, const UClass* ClassFilter)
 {
 	const IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-	
-	FString Paths{};
-	for (const FDirectoryPath& Path: UCommonAutomationSettings::Get()->GetAssetPaths())
+
+	auto FindAssetData = [&](const FString& AssetPath) -> FAssetData
 	{
-		FString AssetPath = Path.Path / AssetName;
 		if (FPackageName::IsValidLongPackageName(AssetPath) && FPackageName::DoesPackageExist(AssetPath))
 		{
 			TArray<FAssetData> Assets;
@@ -30,7 +28,25 @@ FAssetData UE::Automation::FindAssetDataByName(const FString& AssetName, EPackag
 				}
 			}
 		}
+
+		return FAssetData{};
+	};
+	
+	FString Paths{};
+	for (const FDirectoryPath& Path: UCommonAutomationSettings::Get()->GetAssetPaths())
+	{
+		FString AssetPath = Path.Path / AssetName;
+		if (FAssetData AssetData = FindAssetData(AssetPath); AssetData.IsValid())
+		{
+			return AssetData;
+		}
+		
 		Paths += AssetPath + TEXT("\n");
+	}
+
+	if (FAssetData AssetData = FindAssetData(AssetName); AssetData.IsValid())
+	{
+		return AssetData;
 	}
 	
 	UE_LOG(LogCommonAutomation, Error, TEXT("%s: Failed to find asset %s. All matches failed: \n%s"), *FString(__FUNCTION__), *AssetName, *Paths);
