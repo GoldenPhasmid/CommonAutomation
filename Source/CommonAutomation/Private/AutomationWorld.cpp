@@ -16,6 +16,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "Streaming/LevelStreamingDelegates.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
+#include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/ErrorHandling/WorldPartitionStreamingGenerationLogErrorHandler.h"
 
 static bool GRunGarbageCollectionForEveryWorld = false;
 static FAutoConsoleVariableRef RunGarbageCollectionForEveryWorld(
@@ -183,6 +185,8 @@ void FAutomationWorld::HandleTestCompleted(FAutomationTestBase* Test)
 
 void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_InitWorld);
+	
 	World = InWorld;
 	World->AddToRoot();
 	World->SetGameInstance(GameInstance);
@@ -195,6 +199,12 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	WorldContext = &GEngine->CreateNewWorldContext(InitParams.WorldType);
 	WorldContext->SetCurrentWorld(World);
 	WorldContext->OwningGameInstance = GameInstance;
+#if WITH_EDITOR
+	WorldContext->PIEInstance = 0;
+	WorldContext->bIsPrimaryPIEInstance = true;
+	// PIE prefix required to properly locate streaming level objects via LoadStreamLevel/UnloadStreamLevel
+	World->StreamingLevelsPrefix = UWorld::BuildPIEPackagePrefix(WorldContext->PIEInstance);
+#endif
 	if (GameInstance != nullptr)
 	{
 		// disable game instance subsystems not required for this automation world
@@ -235,20 +245,23 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	InitParams.InitWorld.ExecuteIfBound(World);
 	InitParams.InitWorldSettings.ExecuteIfBound(WorldSettings);
 	
-	// Step 5: finish world initialization (see FScopedEditorWorld::Init)
 	World->WorldType = InitParams.WorldType;
 	// tick viewports only in editor worlds
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
 
+	// Step 5: init world
 	{
-		// hack: world partition requires PIE world type to initialize properly for game worlds
-		TGuardValue Guard{World->WorldType, World->IsGameWorld() ? EWorldType::PIE : World->WorldType.GetValue()};
-
 		// disable world subsystems not required for this automation world
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{InitParams.WorldSubsystems};
 		World->InitWorld(InitParams.CreateWorldInitValues());
 		
 		WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
+	}
+
+	// Step 6: separately initialize world partition, simulating a combination of PIE and Cook streaming generation
+	if (InitParams.ShouldInitWorldPartition())
+	{
+		InitializeWorldPartition(World);
 	}
 	
 	if (GameInstance != nullptr)
@@ -262,11 +275,44 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	// Make sure secondary levels are loaded & visible.
 	World->FlushLevelStreaming();
 
+	// Step 2025: separately initialize navigation system, because apparently it is not a part of world initialization
+	// For editor, PIE and game worlds it is initialized separately, either in game instance, editor or game engine
 	if (IsEditorWorld() && !!(CachedInitParams.InitFlags & EWorldInitFlags::InitNavigation))
 	{
 		// initialize navigation system for editor worlds
 		FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::EditorMode);
 	}
+}
+
+void FAutomationWorld::InitializeWorldPartition(UWorld* InWorld)
+{
+	check(World && World->bIsWorldInitialized);
+	if (IsEditorWorld())
+	{
+		return;
+	}
+	
+	UWorldPartition* WorldPartition = InWorld->GetWorldPartition();
+	if (WorldPartition == nullptr)
+	{
+		return;
+	}
+	
+	const FName ContainerPackageName = UActorDescContainerInstance::GetContainerPackageNameFromWorld(WorldPartition->GetTypedOuter<UWorld>());
+	UActorDescContainerInstance* ActorContainerInstance = WorldPartition->RegisterActorDescContainerInstance(ContainerPackageName);
+	check(ActorContainerInstance);
+	
+	FActorDescContainerInstanceCollection Collection({ TObjectPtr<UActorDescContainerInstance>(ActorContainerInstance) });
+
+	FStreamingGenerationLogErrorHandler LogErrorHandler{};
+	UWorldPartition::FGenerateStreamingParams Params{};
+	Params.SetErrorHandler(&LogErrorHandler);
+	Params.SetContainerInstanceCollection(Collection, FStreamingGenerationContainerInstanceCollection::ECollectionType::BaseAndEDLs);
+	
+	UWorldPartition::FGenerateStreamingContext Context{};
+	
+	const bool bResult = WorldPartition->GenerateContainerStreaming(Params, Context);
+	check(bResult);
 }
 
 void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& InitParams)
@@ -332,17 +378,21 @@ const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
 	return WorldCollection->GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
 }
 
-UPackage* FAutomationWorld::CreateUniqueWorldPackage(const FString& PackageName)
+UPackage* FAutomationWorld::CreateUniqueWorldPackage(const FString& PackageName, const FString& TestName)
 {
+	// remove dots from test name to respect innate API that package name contains only one dot
+	const FString ModifiedTestName = TestName.Replace(TEXT("."), TEXT("_"));
 	static uint32 PackageNameCounter = 0;
 	// create a unique temporary package for world loaded from existing package on disk. Add /Temp/ prefix to avoid "package always doesn't exist" warning
-	const FName UniquePackageName = *FString::Printf(TEXT("/Temp/%s_%d"), *PackageName, PackageNameCounter++);
+	const FName UniquePackageName = *FString::Printf(TEXT("/Temp%s_%s%d"), *PackageName, *ModifiedTestName, PackageNameCounter++);
 		
 	UPackage* WorldPackage = NewObject<UPackage>(nullptr, UniquePackageName, RF_Transient);
 	// mark as map package
 	WorldPackage->ThisContainsMap();
 	// add PlayInEditor flag to disable dirtying world package
 	WorldPackage->SetPackageFlags(PKG_PlayInEditor);
+	// set PIE instance because some systems rely on it for correct initialization
+	WorldPackage->SetPIEInstanceID(0);
 	// mark package as transient to avoid it being processed as an asset
 	WorldPackage->SetFlags(RF_Transient);
 
@@ -392,8 +442,6 @@ FAutomationWorld::~FAutomationWorld()
 		GameInstance->Shutdown();
 	}
 
-	UPackage* WorldPackage = World->GetPackage();
-	
 	// destroy world and world context
 	GEngine->ShutdownWorldNetDriver(World);
 	World->DestroyWorld(false);
@@ -472,13 +520,22 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 			return nullptr;
 		}
 		
-		UPackage* WorldPackage = CreateUniqueWorldPackage(FString::Printf(TEXT("%s_%s"), *CurrentTestName, *WorldPackageToLoad));
+		UPackage* WorldPackage = CreateUniqueWorldPackage(WorldPackageToLoad, CurrentTestName);
 
 		const FName WorldPackageName{WorldPackageToLoad};
 		UWorld::WorldTypePreLoadMap.FindOrAdd(WorldPackageName) = InitParams.WorldType;
 
+		FLinkerInstancingContext InstancingContext{};
+		{
+			// create an instancing context that redirects external actors from the original world package to the temporary	
+			// see UEditorEngine::Map_Load when creating a new world from a template map, EditorServer.cpp 2541
+			const FString UniquePackageString = *WriteToString<256>(WorldPackage->GetFName(), TEXT("."), FPackageName::GetShortName(WorldPackage->GetFName()));
+			const FString OrigPackageString = *WriteToString<256>(WorldPackageName, TEXT("."), FPackageName::GetShortName(WorldPackageName));
+			InstancingContext.AddPathMapping(FSoftObjectPath{OrigPackageString}, FSoftObjectPath{UniquePackageString});
+		}
+		
 		// load world package as a temporary package with a different name
-		WorldPackage  = LoadPackage(WorldPackage, PackagePath, InitParams.LoadFlags);
+		WorldPackage  = LoadPackage(WorldPackage, PackagePath, InitParams.LoadFlags, nullptr, &InstancingContext);
 		
 		UWorld::WorldTypePreLoadMap.Remove(WorldPackageName);
 
@@ -500,7 +557,8 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 	if (NewWorld == nullptr)
 	{
 		// create unique package for an empty world
-		UPackage* WorldPackage = CreateUniqueWorldPackage(*CurrentTestName);
+		const FString EmptyPackage{TEXT("")};
+		UPackage* WorldPackage = CreateUniqueWorldPackage(EmptyPackage, CurrentTestName);
 
 		// create an empty world
 		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
@@ -753,8 +811,12 @@ void FAutomationWorld::RouteStartPlay() const
 		return;
 	}
 	
-	FURL URL{};
-	World->InitializeActorsForPlay(URL);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(FAutomationWorld_InitActors);
+		
+		FURL URL{};
+		World->InitializeActorsForPlay(URL, true);
+	}
 	
 	if (!!(CachedInitParams.InitFlags & EWorldInitFlags::InitNavigation))
 	{
@@ -862,18 +924,13 @@ void FAutomationWorld::FinishWorldTravel()
     }
 	
 	{
-		// hack: world partition requires PIE world type to initialize properly for game worlds
-		
-		FDelegateHandle WorldCreatedHandle = FWorldDelegates::OnPostWorldCreation.AddLambda([](const UWorld* World)
-		{
-			UWorld::WorldTypePreLoadMap.Add(World->GetFName(), EWorldType::PIE);
-		});
-
+		// world partition requires PIE world type to initialize properly for absolute world travel in editor
+		TGuardValue WorldType{WorldContext->WorldType, EWorldType::PIE};
 		// disable world subsystems not required for this automation world
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{CachedInitParams.WorldSubsystems};
 		GEngine->TickWorldTravel(*WorldContext, World->NextSwitchCountdown);
-		
-		FWorldDelegates::OnPostWorldCreation.Remove(WorldCreatedHandle);
+
+		World->WorldType = EWorldType::Game;
 	}
 	
 	// set new world from a world context

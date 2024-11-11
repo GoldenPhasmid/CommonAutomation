@@ -32,11 +32,25 @@ bool UTestGameInstanceSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 	return UE::Private::bTestSubsystemEnabled;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_CreateWorldUniqueTest, "CommonAutomation.AutomationWorld.CreateWorld", AutomationTestFlags)
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FAutomationWorld_CreateWorldUniqueTest, "CommonAutomation.AutomationWorld.CreateWorld", AutomationTestFlags)
+
+void FAutomationWorld_CreateWorldUniqueTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray<FString>& OutTestCommands) const
+{
+	OutBeautifiedNames.Add(TEXT("Default"));
+	OutBeautifiedNames.Add(TEXT("World Partition"));
+	OutTestCommands.Add(TEXT("Default"));
+	OutTestCommands.Add(TEXT("WorldPartition"));
+}
 
 bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
 {
-	FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateGameWorld(EWorldInitFlags::WithGameInstance);
+	EWorldInitFlags Flags = EWorldInitFlags::WithGameInstance;
+	if (Parameters.Contains(TEXT("WorldPartition")))
+	{
+		Flags |= EWorldInitFlags::InitWorldPartition;
+	}
+	
+	FAutomationWorldPtr ScopedWorld = FAutomationWorld::CreateGameWorld(Flags);
 	UTEST_TRUE("Automation world is valid", ScopedWorld.IsValid());
 
 	const FObjectKey WorldKey{ScopedWorld->GetWorld()};
@@ -48,7 +62,7 @@ bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
 	UTEST_TRUE("Game instance is valid", GameInstanceKey != FObjectKey{});
 
 	ScopedWorld.Reset();
-	ScopedWorld = FAutomationWorld::CreateGameWorld(EWorldInitFlags::WithGameInstance);
+	ScopedWorld = FAutomationWorld::CreateGameWorld(Flags);
 
 	UTEST_TRUE("World is unique",			WorldKey		!= FObjectKey{ScopedWorld->GetWorld()});
 	UTEST_TRUE("World package is unique",	PackageKey		!= FObjectKey{ScopedWorld->GetWorld()->GetPackage()});
@@ -59,13 +73,24 @@ bool FAutomationWorld_CreateWorldUniqueTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAutomationWorld_LoadWorldUniqueTest, "CommonAutomation.AutomationWorld.LoadWorld", AutomationTestFlags)
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FAutomationWorld_LoadWorldUniqueTest, "CommonAutomation.AutomationWorld.LoadWorld", AutomationTestFlags)
+
+void FAutomationWorld_LoadWorldUniqueTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray<FString>& OutTestCommands) const
+{
+	OutBeautifiedNames.Add(TEXT("Default"));
+	OutBeautifiedNames.Add(TEXT("World Partition"));
+	OutTestCommands.Add(TEXT("/Engine/Maps/Entry"));
+	OutTestCommands.Add(TEXT("/CommonAutomation/WPUnitTest"));
+}
 
 bool FAutomationWorld_LoadWorldUniqueTest::RunTest(const FString& Parameters)
 {
-	const FString TestMapPackageName{TEXT("/Engine/Maps/Entry")};
+	const FString TestMapPackageName = Parameters;
+
+	const FSoftObjectPath WorldPath = UE::Automation::FindWorldAssetByName(TestMapPackageName);
+	UTEST_TRUE("World path is valid", !WorldPath.IsNull());
 	
-	FAutomationWorldPtr ScopedWorld = FAutomationWorld::LoadGameWorld(UE::Automation::FindAssetDataByPath(TestMapPackageName).ToSoftObjectPath(), EWorldInitFlags::WithGameInstance);
+	FAutomationWorldPtr ScopedWorld = FAutomationWorld::LoadGameWorld(WorldPath, EWorldInitFlags::WithGameInstance);
 	UTEST_TRUE("Automation world is valid", ScopedWorld.IsValid());
 	
 	const FObjectKey WorldKey{ScopedWorld->GetWorld()};
@@ -80,9 +105,9 @@ bool FAutomationWorld_LoadWorldUniqueTest::RunTest(const FString& Parameters)
 	ScopedWorld = FAutomationWorld::LoadGameWorld(TestMapPackageName, EWorldInitFlags::WithGameInstance);
 
 	UTEST_TRUE("World is unique",			WorldKey		!= FObjectKey{ScopedWorld->GetWorld()});
-	UTEST_TRUE("Game instance is unique",	GameInstanceKey	!= FObjectKey{ScopedWorld->GetGameInstance()});
-#if !REUSE_GAME_INSTANCE
 	UTEST_TRUE("World package is unique",	PackageKey		!= FObjectKey{ScopedWorld->GetWorld()->GetPackage()});
+#if !REUSE_GAME_INSTANCE
+	UTEST_TRUE("Game instance is unique",	GameInstanceKey	!= FObjectKey{ScopedWorld->GetGameInstance()});
 #endif
 	
 	return !HasAnyErrors();

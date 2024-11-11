@@ -145,14 +145,20 @@ struct COMMONAUTOMATION_API FAutomationWorldInitParams
 	template <typename T>
 	FAutomationWorldInitParams& SetInitWorld(T&& Callback)
 	{
-		InitWorld.BindLambda(Forward<T>(Callback));
+		if (Callback)
+		{
+			InitWorld.BindLambda(Forward<T>(Callback));
+		}
 		return *this;
 	}
 	
 	template <typename T>
 	FAutomationWorldInitParams& SetInitWorldSettings(T&& Callback)
 	{
-		InitWorldSettings.BindLambda(Forward<T>(Callback));
+		if (Callback)
+		{
+			InitWorldSettings.BindLambda(Forward<T>(Callback));
+		}
 		return *this;
 	}
 	
@@ -400,10 +406,19 @@ public:
 		return World->GetGameState<T>();
 	}
 
+	/** spawn actor overload */
 	template <typename T = AActor>
 	T* SpawnActor(UClass* Class = T::StaticClass(), const FTransform& Transform = FTransform::Identity, FActorSpawnParameters SpawnParams = FActorSpawnParameters{})
 	{
 		return CastChecked<T>(GetWorld()->SpawnActor(Class, &Transform, SpawnParams), ECastCheckedType::NullAllowed);
+	}
+
+	/** spawn actor overload */
+	template <typename T = AActor>
+	T* SpawnActorSimple(FActorSpawnParameters SpawnParams = FActorSpawnParameters{})
+	{
+		static const FTransform Identity = FTransform::Identity;
+		return CastChecked<T>(GetWorld()->SpawnActor(T::StaticClass(), &Identity, SpawnParams), ECastCheckedType::NullAllowed);
 	}
 	
 	/** @return actor with a given tag */
@@ -446,6 +461,8 @@ private:
 	void HandleLevelStreamingStateChange(UWorld* OtherWorld, const ULevelStreaming* LevelStreaming, ULevel* LevelIfLoaded, ELevelStreamingState PrevState, ELevelStreamingState NewState);
 
 	void InitializeNewWorld(UWorld* InWorld, const FAutomationWorldInitParams& InitParams);
+	void InitializeWorldPartition(UWorld* InWorld);
+	
 	USubsystem* AddAndInitializeSubsystem(FSubsystemCollectionBase* Collection, TSubclassOf<USubsystem> SubsystemClass, UObject* Outer);
 	
 	void CreateGameInstance(const FAutomationWorldInitParams& InitParams);
@@ -483,7 +500,7 @@ private:
 	ELevelTick TickType = LEVELTICK_All;
 
 	/** @return world package with an unique name */
-	static UPackage* CreateUniqueWorldPackage(const FString& PackageName);
+	static UPackage* CreateUniqueWorldPackage(const FString& PackageName, const FString& TestName);
 
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;
