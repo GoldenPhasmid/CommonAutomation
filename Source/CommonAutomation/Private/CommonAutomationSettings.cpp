@@ -61,9 +61,12 @@ void UCommonAutomationSettings::PostInitProperties()
 
 	if (HasAnyFlags(RF_ClassDefaultObject))
 	{
-		InitializeToDefault(WorldSubsystemContainer, WorldSubsystems, *GetConfigKey<UWorldSubsystem>());
-		InitializeToDefault(GameInstanceSubsystemContainer, GameInstanceSubsystems, *GetConfigKey<UGameInstanceSubsystem>());
-		InitializeToDefault(LocalPlayerSubsystemContainer, LocalPlayerSubsystems, *GetConfigKey<ULocalPlayerSubsystem>());
+		FCoreDelegates::OnAllModuleLoadingPhasesComplete.AddWeakLambda(this, [this]
+		{
+			InitializeToDefault(WorldSubsystemContainer, WorldSubsystems, *GetConfigKey<UWorldSubsystem>());
+			InitializeToDefault(GameInstanceSubsystemContainer, GameInstanceSubsystems, *GetConfigKey<UGameInstanceSubsystem>());
+			InitializeToDefault(LocalPlayerSubsystemContainer, LocalPlayerSubsystems, *GetConfigKey<ULocalPlayerSubsystem>());
+		});
 	}
 }
 
