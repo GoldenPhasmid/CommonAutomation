@@ -457,7 +457,11 @@ public:
 	
 	
 	~FAutomationWorld();
-
+	// explicitly deleted copy/move constructor/assignment
+	FAutomationWorld(const FAutomationWorld& Other) = delete;
+	FAutomationWorld(FAutomationWorld&& Other) = delete;
+	FAutomationWorld& operator=(const FAutomationWorld& Other) = delete;
+	FAutomationWorld& operator=(FAutomationWorld&& Other) = delete;
 private:
 
 	FAutomationWorld(UWorld* NewWorld, const FAutomationWorldInitParams& InitParams);

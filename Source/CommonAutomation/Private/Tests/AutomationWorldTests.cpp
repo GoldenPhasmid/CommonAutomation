@@ -336,7 +336,7 @@ bool FAutomationWorld_WorldTravel::RunTest(const FString& Parameters)
 		const FObjectKey WorldSubsystem{ScopedWorld->GetSubsystem<UTestWorldSubsystem>()};
 		const FObjectKey GameInstanceSubsystem{ScopedWorld->GetSubsystem<UTestGameInstanceSubsystem>()};
 
-		ScopedWorld->AbsoluteWorldTravel(TSoftObjectPtr<UWorld>{WorldPath});
+		ScopedWorld->AbsoluteWorldTravel(TSoftObjectPtr<UWorld>{WorldPath}, ACommonAutomationGameMode::StaticClass());
 		UTEST_TRUE("AFTER WORLD TRAVEL: Test world subsystem is created", ScopedWorld->GetSubsystem<UTestWorldSubsystem>() != nullptr);
 		UTEST_TRUE("AFTER WORLD TRAVEL: Test game instance subsystem is created", ScopedWorld->GetSubsystem<UTestGameInstanceSubsystem>() != nullptr);
 
