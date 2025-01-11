@@ -348,9 +348,14 @@ public:
 		return GetWorld();
 	}
 
+	FORCEINLINE bool IsGameWorld() const
+	{
+		return CachedInitParams.WorldType == EWorldType::Game;
+	}
+	
 	FORCEINLINE bool IsEditorWorld() const
 	{
-		return World->WorldType == EWorldType::Editor;
+		return CachedInitParams.WorldType == EWorldType::Editor;
 	}
 	
 	/** create primary player for this world. If player has already been created, return it */
@@ -501,6 +506,7 @@ private:
 
 	/** @return world package with an unique name */
 	static UPackage* CreateUniqueWorldPackage(const FString& PackageName, const FString& TestName);
+	static FName CreateUniqueWorldName();
 
 	static UGameInstance* SharedGameInstance;
 	static bool bExists;

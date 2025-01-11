@@ -17,6 +17,7 @@
 #include "Streaming/LevelStreamingDelegates.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/WorldPartitionLevelHelper.h"
 #include "WorldPartition/ErrorHandling/WorldPartitionStreamingGenerationLogErrorHandler.h"
 
 static bool GRunGarbageCollectionForEveryWorld = false;
@@ -141,6 +142,9 @@ FAutomationWorld::FAutomationWorld(UWorld* InWorld, const FAutomationWorldInitPa
 {
 	bExists = true;
 	InitialFrameCounter = GFrameCounter;
+	// automation world supports either Editor or Game world. Any other world type is unsupported.
+	// Game worlds receive either GAME or PIE world type depending on the requirements (to make engine functionality work without changes)
+	check(InitParams.WorldType == EWorldType::Game || InitParams.WorldType == EWorldType::Editor);
 
 	StreamingStateHandle = FLevelStreamingDelegates::OnLevelStreamingStateChanged.AddRaw(this, &FAutomationWorld::HandleLevelStreamingStateChange);
 
@@ -200,10 +204,10 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	WorldContext->SetCurrentWorld(World);
 	WorldContext->OwningGameInstance = GameInstance;
 #if WITH_EDITOR
-	WorldContext->PIEInstance = 0;
+	WorldContext->PIEInstance = INDEX_NONE;
 	WorldContext->bIsPrimaryPIEInstance = true;
 	// PIE prefix required to properly locate streaming level objects via LoadStreamLevel/UnloadStreamLevel
-	World->StreamingLevelsPrefix = UWorld::BuildPIEPackagePrefix(WorldContext->PIEInstance);
+	// World->StreamingLevelsPrefix = UWorld::BuildPIEPackagePrefix(WorldContext->PIEInstance);
 #endif
 	if (GameInstance != nullptr)
 	{
@@ -297,6 +301,10 @@ void FAutomationWorld::InitializeWorldPartition(UWorld* InWorld)
 	{
 		return;
 	}
+
+	// world partition streaming requires PIE as a world type, because it required IsRunningGame for pure GAME worlds
+	World->WorldType = EWorldType::PIE;
+	WorldContext->WorldType = EWorldType::PIE;
 	
 	const FName ContainerPackageName = UActorDescContainerInstance::GetContainerPackageNameFromWorld(WorldPartition->GetTypedOuter<UWorld>());
 	UActorDescContainerInstance* ActorContainerInstance = WorldPartition->RegisterActorDescContainerInstance(ContainerPackageName);
@@ -313,6 +321,10 @@ void FAutomationWorld::InitializeWorldPartition(UWorld* InWorld)
 	
 	const bool bResult = WorldPartition->GenerateContainerStreaming(Params, Context);
 	check(bResult);
+
+	// Apply remapping of Persistent Level's SoftObjectPaths
+	// Here we remap SoftObjectPaths so that they are mapped from the PersistentLevel Package to the Cell Packages using the mapping built by the policy
+	FWorldPartitionLevelHelper::RemapLevelSoftObjectPaths(World->PersistentLevel, WorldPartition);
 }
 
 void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& InitParams)
@@ -378,6 +390,12 @@ const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
 	return WorldCollection->GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
 }
 
+FName FAutomationWorld::CreateUniqueWorldName()
+{
+	static uint32 WorldNameCounter = 0;
+	return *FString::Printf(TEXT("%s%d"), TEXT("AutomationWorld"), WorldNameCounter++);
+}
+
 UPackage* FAutomationWorld::CreateUniqueWorldPackage(const FString& PackageName, const FString& TestName)
 {
 	// remove dots from test name to respect innate API that package name contains only one dot
@@ -392,7 +410,7 @@ UPackage* FAutomationWorld::CreateUniqueWorldPackage(const FString& PackageName,
 	// add PlayInEditor flag to disable dirtying world package
 	WorldPackage->SetPackageFlags(PKG_PlayInEditor);
 	// set PIE instance because some systems rely on it for correct initialization
-	WorldPackage->SetPIEInstanceID(0);
+	WorldPackage->SetPIEInstanceID(INDEX_NONE);
 	// mark package as transient to avoid it being processed as an asset
 	WorldPackage->SetFlags(RF_Transient);
 
@@ -417,6 +435,8 @@ void FAutomationWorld::HandleLevelStreamingStateChange(UWorld* OtherWorld, const
 			// sanity check that sublevel world is not a main world
 			check(LevelOuterWorld != World);
 			LevelOuterWorld->ClearFlags(GARBAGE_COLLECTION_KEEPFLAGS);
+			// mark package as transient to avoid it being processed as an asset
+			LevelOuterWorld->GetPackage()->SetFlags(RF_Transient);
 		}
 #endif
 	}
@@ -560,9 +580,11 @@ FAutomationWorldPtr FAutomationWorld::CreateWorld(const FAutomationWorldInitPara
 		const FString EmptyPackage{TEXT("")};
 		UPackage* WorldPackage = CreateUniqueWorldPackage(EmptyPackage, CurrentTestName);
 
-		// create an empty world
+		// create an empty world with a UNIQUE name
 		FWorldInitializationValues InitValues = InitParams.CreateWorldInitValues();
-		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, TEXT("AutomationWorld"), WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
+		NewWorld = UWorld::CreateWorld(InitParams.WorldType, false, CreateUniqueWorldName(), WorldPackage, true, ERHIFeatureLevel::Num, &InitValues, true);
+		// mark as stable for networking, by default world is stable because it is loaded from package
+		NewWorld->bIsNameStableForNetworking = true;
 	}
 
 	if (NewWorld == nullptr)
@@ -925,19 +947,20 @@ void FAutomationWorld::FinishWorldTravel()
 	
 	{
 		// world partition requires PIE world type to initialize properly for absolute world travel in editor
+		// we can't know whether world we're traveling to supports world partition until we load it
 		TGuardValue WorldType{WorldContext->WorldType, EWorldType::PIE};
 		// disable world subsystems not required for this automation world
 		FScopeDisableSubsystemCreation<UWorldSubsystem> Scope{CachedInitParams.WorldSubsystems};
 		GEngine->TickWorldTravel(*WorldContext, World->NextSwitchCountdown);
-
-		World->WorldType = EWorldType::Game;
 	}
 	
 	// set new world from a world context
 	World = WorldContext->World();
-	World->WorldType = EWorldType::Game;
 	check(World && World->bIsWorldInitialized);
-
+	
+	// mark package as transient to avoid it being processed as an asset
+	World->GetPackage()->SetFlags(RF_Transient);
+	
 	// update world collection pointer
 	WorldCollection = GetSubsystemCollection<UWorldSubsystem>(World);
 }
