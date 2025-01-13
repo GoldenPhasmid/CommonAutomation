@@ -199,7 +199,7 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	PrevGWorld = GWorld;
 	GWorld = World;
 
-	// Step 2: create and initialize world context
+	// Step 2: create and initialize world context, assign correct world type
 	WorldContext = &GEngine->CreateNewWorldContext(InitParams.WorldType);
 	WorldContext->SetCurrentWorld(World);
 	WorldContext->OwningGameInstance = GameInstance;
@@ -209,6 +209,9 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	// PIE prefix required to properly locate streaming level objects via LoadStreamLevel/UnloadStreamLevel
 	// World->StreamingLevelsPrefix = UWorld::BuildPIEPackagePrefix(WorldContext->PIEInstance);
 #endif
+	// assign world type before initializing game instance, otherwise it receives Inactive world which can mess up various systems
+	World->WorldType = InitParams.WorldType;
+	
 	if (GameInstance != nullptr)
 	{
 		// disable game instance subsystems not required for this automation world
@@ -249,7 +252,6 @@ void FAutomationWorld::InitializeNewWorld(UWorld* InWorld, const FAutomationWorl
 	InitParams.InitWorld.ExecuteIfBound(World);
 	InitParams.InitWorldSettings.ExecuteIfBound(WorldSettings);
 	
-	World->WorldType = InitParams.WorldType;
 	// tick viewports only in editor worlds
 	TickType = InitParams.WorldType == EWorldType::Game ? LEVELTICK_All : LEVELTICK_ViewportsOnly;
 
