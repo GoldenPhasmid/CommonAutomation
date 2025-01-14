@@ -78,6 +78,22 @@ FObjectSubsystemCollection<TSubsystemType>* GetSubsystemCollection(T* Owner)
 	return reinterpret_cast<TCollectionType*>(reinterpret_cast<uint8*>(Owner) + CollectionOffset);
 }
 
+namespace UE::Automation
+{
+	void RemapLevelSoftObjectPaths(ULevel* Level, UWorldPartition* WorldPartition)
+	{
+		FSoftObjectPathFixupArchive FixupSerializer([WorldPartition](FSoftObjectPath& Value)
+		{
+			if(!Value.IsNull())
+			{
+				WorldPartition->RemapSoftObjectPath(Value);
+			}
+		});
+		FixupSerializer.Fixup(Level);
+	}
+}
+
+
 const FAutomationWorldInitParams FAutomationWorldInitParams::Minimal{EWorldType::Game, EWorldInitFlags::Minimal};
 const FAutomationWorldInitParams FAutomationWorldInitParams::WithBeginPlay{EWorldType::Game, EWorldInitFlags::WithBeginPlay};
 const FAutomationWorldInitParams FAutomationWorldInitParams::WithGameInstance{EWorldType::Game, EWorldInitFlags::WithGameInstance};
@@ -326,7 +342,7 @@ void FAutomationWorld::InitializeWorldPartition(UWorld* InWorld)
 
 	// Apply remapping of Persistent Level's SoftObjectPaths
 	// Here we remap SoftObjectPaths so that they are mapped from the PersistentLevel Package to the Cell Packages using the mapping built by the policy
-	FWorldPartitionLevelHelper::RemapLevelSoftObjectPaths(World->PersistentLevel, WorldPartition);
+	UE::Automation::RemapLevelSoftObjectPaths(World->PersistentLevel, WorldPartition);
 }
 
 void FAutomationWorld::CreateGameInstance(const FAutomationWorldInitParams& InitParams)

@@ -105,6 +105,13 @@ public:
 	bool bUseProjectDefaultGameMode = false;
 
 	/**
+	 * If set, project and project plugin subsystems are NOT created by default when running automation world
+	 * You can still enable them manually via FWorldInitParams, or specify them as Enabled Subsystems in Project Settings
+	 */
+	UPROPERTY(EditAnywhere, Config)
+	bool bDisableProjectSubsystems = true;
+
+	/**
 	 * "Default" game mode for automation world, if @bUseProjectDefaultGameMode is set to false
 	 * If FWorldInitParams or map's WorldSettings doesn't specify a game mode, this game mode class is used instead
 	 */
@@ -119,13 +126,6 @@ protected:
 	 */
 	UPROPERTY(EditAnywhere, Config, meta = (Validate, DisplayName = "Asset Paths For Automation", LongPackageName))
 	TArray<FDirectoryPath> AutomationAssetPaths;
-
-	/**
-	 * If set, project and project plugin subsystems are NOT created by default when running automation world
-	 * You can still enable them manually via FWorldInitParams, or specify them as Enabled Subsystems in Project Settings
-	 */
-	UPROPERTY(EditAnywhere, Config)
-	bool bDisableProjectSubsystems = true;
 	
 	/**
 	 * A list of world subsystems will be always present when running automation world
