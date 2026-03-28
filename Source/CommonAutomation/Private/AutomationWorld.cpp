@@ -403,11 +403,6 @@ void FAutomationWorld::CreateViewportClient()
 	WorldContext->GameViewport = NewViewport;
 }
 
-const TArray<UWorldSubsystem*>& FAutomationWorld::GetWorldSubsystems() const
-{
-	return WorldCollection->GetSubsystemArray<UWorldSubsystem>(UWorldSubsystem::StaticClass());
-}
-
 FName FAutomationWorld::CreateUniqueWorldName()
 {
 	static uint32 WorldNameCounter = 0;

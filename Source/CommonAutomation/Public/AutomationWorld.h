@@ -479,8 +479,6 @@ private:
 	void CreateGameInstance(const FAutomationWorldInitParams& InitParams);
 	void CreateViewportClient();
 
-	const TArray<UWorldSubsystem*>& GetWorldSubsystems() const;
-
 	/** Cached pointer to a world subsystem collection, retrieved in a fancy way from @World */
 	FObjectSubsystemCollection<UWorldSubsystem>* WorldCollection = nullptr;
 	/**

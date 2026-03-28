@@ -15,7 +15,7 @@
 #include "UObject/GarbageCollection.h"
 #include "WorldPartition/WorldPartition.h"
 
-constexpr auto AutomationTestFlags = EAutomationTestFlags::EngineFilter | EAutomationTestFlags::EditorContext | EAutomationTestFlags::CriticalPriority;
+const EAutomationTestFlags AutomationTestFlags = EAutomationTestFlags::EngineFilter | EAutomationTestFlags::EditorContext | EAutomationTestFlags::CriticalPriority;
 
 namespace UE::Private
 {

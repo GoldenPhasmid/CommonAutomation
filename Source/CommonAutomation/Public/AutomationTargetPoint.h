@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/TargetPoint.h"
 #include "InstancedStruct.h"
+#include "StructUtils/InstancedStruct.h"
 
 #include "AutomationTargetPoint.generated.h"
 

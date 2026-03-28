@@ -17,7 +17,8 @@ public class CommonAutomation : ModuleRules
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"Core",
+				"Core", 
+				"CoreUObject",
 			}
 		);
 			
@@ -25,7 +26,6 @@ public class CommonAutomation : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"CoreUObject",
 				"Engine",
 				"Slate",
 				"SlateCore",
@@ -39,5 +39,16 @@ public class CommonAutomation : ModuleRules
 				"StructUtils",
 			}
 		);
+		
+		if (Target.Version.MinorVersion >= 5)
+		{
+			PublicDefinitions.Add("AUTOTEST_FILTER_MASK=EAutomationTestFlags_FilterMask");
+			PublicDefinitions.Add("AUTOTEST_APPLICATION_MASK=EAutomationTestFlags_ApplicationContextMask");
+		}
+		else
+		{
+			PublicDefinitions.Add("AUTOTEST_FILTER_MASK=EAutomationTestFlags::FilterMask");
+			PublicDefinitions.Add("AUTOTEST_APPLICATION_MASK=EAutomationTestFlags::ApplicationContextMask");
+		}
 	}
 }
